@@ -6,7 +6,8 @@ import Globe, { type GlobeMethods } from "react-globe.gl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { Pin, Route } from "@/lib/types";
-import { altitudeForSpread, wholeGlobeAltitude } from "@/lib/geo";
+import { altitudeForSpread, distanceKm, wholeGlobeAltitude } from "@/lib/geo";
+import { visibleLabels, type PlaceLabel } from "@/lib/labels";
 
 /** Where the camera should fly. `spread` = degrees of arc that must fit on screen; `home` = whole globe. */
 export interface Focus { lat: number; lng: number; spread?: number; home?: boolean; key: number; ms?: number }
@@ -26,20 +27,21 @@ interface Props {
 
 type Marker =
   | { kind: "pin"; id: string; lat: number; lng: number; type: Pin["type"]; name: string }
-  | { kind: "stop"; id: string; lat: number; lng: number; index: number; name: string };
+  | { kind: "stop"; id: string; lat: number; lng: number; index: number; name: string }
+  | PlaceLabel;
 
 const HOME = { lat: 28, lng: 8 };
 const R = 100; // globe.gl radius in scene units
 const TOPBAR = 70; // px reserved at the top for the header
 
-// Sharp satellite imagery when zoomed in (the whole-Earth texture blurs up close).
-// Either a full XYZ template, or a Mapbox public token to build one.
+// Satellite imagery at every zoom level (one consistent look, sharp up close).
+// Either a full XYZ template, or a Mapbox public token to build one. Without
+// either, the globe uses the bundled Blue Marble texture.
 const TILE_TEMPLATE =
   process.env.NEXT_PUBLIC_SATELLITE_TILES ||
   (process.env.NEXT_PUBLIC_MAPBOX_TOKEN
     ? `https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`
     : "");
-const TILES_BELOW_ALTITUDE = 0.5;
 const tileUrl = (x: number, y: number, z: number) =>
   TILE_TEMPLATE.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
 
@@ -86,15 +88,39 @@ export default function GlobeCanvas(props: Props) {
   const handlers = useRef(props);
   handlers.current = props;
 
-  // Only switch to satellite tiles once one has actually loaded: if the tile
-  // source is down or misconfigured, the globe keeps its texture instead of going blank.
-  const [tilesOk, setTilesOk] = useState(false);
+  // Decide once, before the globe appears, whether satellite tiles work. If the
+  // source is down or misconfigured the globe uses its texture instead of going blank,
+  // and it never swaps imagery while you're looking at it.
+  const [tiles, setTiles] = useState<"pending" | "on" | "off">(TILE_TEMPLATE ? "pending" : "off");
   useEffect(() => {
     if (!TILE_TEMPLATE) return;
+    let done = false;
+    const finish = (v: "on" | "off") => { if (!done) { done = true; setTiles(v); } };
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => setTilesOk(true);
+    img.onload = () => finish("on");
+    img.onerror = () => finish("off");
     img.src = tileUrl(0, 0, 1);
+    const t = setTimeout(() => finish("off"), 3500);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Where the camera is looking, updated a few times a second while moving; drives place labels.
+  const [view, setView] = useState({ lat: HOME.lat, lng: HOME.lng, alt: 2.3 });
+  const viewRef = useRef(view);
+  const pendingPov = useRef<{ lat: number; lng: number; altitude: number } | null>(null);
+  const viewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const trackView = useCallback((pov: { lat: number; lng: number; altitude: number }) => {
+    pendingPov.current = pov;
+    if (viewTimer.current) return;
+    viewTimer.current = setTimeout(() => {
+      viewTimer.current = null;
+      const p = pendingPov.current, v = viewRef.current;
+      if (!p) return;
+      const moved = distanceKm(v, p) > Math.max(40, p.altitude * 1200);
+      const zoomed = Math.abs(p.altitude - v.alt) / Math.max(0.05, v.alt) > 0.08;
+      if (moved || zoomed) { viewRef.current = { lat: p.lat, lng: p.lng, alt: p.altitude }; setView(viewRef.current); }
+    }, 160);
   }, []);
 
   // theme colours follow the OS light/dark setting
@@ -150,6 +176,8 @@ export default function GlobeCanvas(props: Props) {
       resumeTimer.current = setTimeout(() => setAutoRotate(!handlers.current.route), 9000);
     });
     g.pointOfView({ ...HOME, altitude: homeAltitude() }, 0);
+    viewRef.current = { ...HOME, alt: homeAltitude() };
+    setView(viewRef.current);
     setAutoRotate(true);
     setReady(true);
     handlers.current.onReady?.();
@@ -163,12 +191,13 @@ export default function GlobeCanvas(props: Props) {
 
   // Rotation feels the same at any zoom (slower close to the surface) and
   // route lines thin out as you get closer.
-  const handleZoom = useCallback((pov: { altitude: number }) => {
+  const handleZoom = useCallback((pov: { lat: number; lng: number; altitude: number }) => {
     const c = globeRef.current?.controls();
     if (c) c.rotateSpeed = Math.min(0.6, 0.06 + pov.altitude * 0.22);
     const q = Math.round(Math.min(3, Math.max(0.05, pov.altitude)) * 20) / 20;
     setAlt((prev) => (prev === q ? prev : q));
-  }, []);
+    trackView(pov);
+  }, [trackView]);
 
   // Camera flights
   useEffect(() => {
@@ -182,14 +211,31 @@ export default function GlobeCanvas(props: Props) {
   useEffect(() => { if (ready && !route) setAutoRotate(true); }, [ready, route, setAutoRotate]);
 
   // ---------- markers ----------
-  const markers: Marker[] = useMemo(() => {
+  // Pins/stops and place labels are memoised separately so moving the camera
+  // (which changes labels) never re-creates the pins' DOM elements.
+  const pinMarkers: Marker[] = useMemo(() => {
     const m: Marker[] = pins.map((p) => ({ kind: "pin", id: p.id, lat: p.lat, lng: p.lng, type: p.type, name: p.name }));
     if (route) route.stops.slice(0, revealed).forEach((s, i) => m.push({ kind: "stop", id: `${route.id}-${i}`, lat: s.lat, lng: s.lng, index: i, name: s.name }));
     return m;
   }, [pins, route, revealed]);
+  // Drop place names that would sit on top of a pin or route stop (e.g. "Luxor" next to stop "Luxor").
+  const labels = useMemo(() => {
+    const nearKm = Math.max(8, view.alt * 260);
+    return visibleLabels(view, view.alt).filter((l) => !pinMarkers.some((m) =>
+      m.name.toLowerCase() === l.name.toLowerCase() || distanceKm(m, l) < nearKm));
+  }, [view, pinMarkers]);
+  const markers = useMemo(() => [...labels, ...pinMarkers], [labels, pinMarkers]);
 
   const makeMarker = useCallback((d: object) => {
-    const mk = d as Marker;
+    if ((d as Marker).kind === "country" || (d as Marker).kind === "city") {
+      const lb = d as PlaceLabel;
+      const el = document.createElement("div");
+      el.className = `lb lb-${lb.kind} lb-t${lb.tier}`;
+      el.dataset.label = "1";
+      el.textContent = lb.name;
+      return el;
+    }
+    const mk = d as Exclude<Marker, PlaceLabel>;
     // globe.gl centres this element on the point; children are offset from that centre.
     const el = document.createElement("button");
     el.type = "button";
@@ -232,12 +278,12 @@ export default function GlobeCanvas(props: Props) {
   const routeRgb = useMemo(() => new THREE.Color(colors.route), [colors.route]);
   const ringColor = useCallback(() => (t: number) => `rgba(${Math.round(routeRgb.r * 255)},${Math.round(routeRgb.g * 255)},${Math.round(routeRgb.b * 255)},${(1 - t) * 0.8})`, [routeRgb]);
 
-  if (!w || !h) return null;
+  if (!w || !h || tiles === "pending") return null;
   // Centre the globe in the free space between the header and the bottom panel.
   const offsetY = (TOPBAR - bottomInset) / 2;
   const thin = Math.min(1, Math.max(0.1, alt * 0.8));
 
-  const tilesOn = tilesOk && alt < TILES_BELOW_ALTITUDE;
+  const tilesOn = tiles === "on";
   return (
     <>
     {tilesOn && process.env.NEXT_PUBLIC_MAPBOX_TOKEN && !process.env.NEXT_PUBLIC_SATELLITE_TILES && (
@@ -270,6 +316,7 @@ export default function GlobeCanvas(props: Props) {
       htmlTransitionDuration={0}
       htmlElementVisibilityModifier={(el, visible) => {
         el.style.opacity = visible ? "1" : "0";
+        if (el.dataset.label) return; // place names never take taps
         el.style.pointerEvents = visible ? "auto" : "none";
         // Put a stop's name on whichever side has room on screen.
         const label = visible ? (el.querySelector(".mk-label") as HTMLElement | null) : null;

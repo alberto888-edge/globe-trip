@@ -1,13 +1,19 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnalyzeResponse, AnalyzeSources, Pin, PinType, Route } from "@/lib/types";
+import type { AnalyzeOk, AnalyzeResponse, Candidate, Pin, PinType, PlanRequest, PlanResponse, Route } from "@/lib/types";
 import { DEMO_ROUTES, EXAMPLES, SEED_PINS } from "@/lib/demo";
 import { frame, routeKm } from "@/lib/geo";
 import { detectPlatform, toUrl } from "@/lib/links";
+import { routeFromCandidates } from "@/lib/itinerary";
 import { usePersistentState } from "@/lib/storage";
+import { usePlaceInfo } from "@/lib/wiki";
 import type { Focus } from "./GlobeCanvas";
 import Sheet from "./Sheet";
+import PlacePhoto from "./PlacePhoto";
+import PickSheet from "./PickSheet";
+import PlannerSheet from "./PlannerSheet";
+import ItinerarySheet from "./ItinerarySheet";
 
 const GlobeCanvas = dynamic(() => import("./GlobeCanvas"), { ssr: false });
 
@@ -16,12 +22,14 @@ type SheetState =
   | { kind: "pin"; id: string }
   | { kind: "itinerary" }
   | { kind: "trips" }
-  | { kind: "describe"; url: string; message: string }
+  | { kind: "pick"; result: AnalyzeOk }
+  | { kind: "planner" }
   | null;
 
-interface Analysis { label: string; step: number; cancellable: boolean }
+interface Analysis { label: string; steps: string[]; step: number; cancellable: boolean }
 
-const STEPS = ["Leyendo el vídeo", "Detectando lugares", "Ordenando la ruta y los días"];
+const VIDEO_STEPS = ["Abriendo el vídeo", "Viendo los fotogramas", "Detectando los lugares"];
+const PLAN_STEPS = ["Eligiendo los mejores sitios", "Ordenando la ruta y los días", "Calculando el presupuesto"];
 const fmt = (v: number, pos: string, neg: string) => `${Math.abs(v).toFixed(1)}° ${v >= 0 ? pos : neg}`;
 const coords = (lat: number, lng: number) => `${fmt(lat, "N", "S")} · ${fmt(lng, "E", "O")}`;
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -48,10 +56,10 @@ export default function App() {
   const didRestore = useRef(false);
 
   // ---------- helpers ----------
-  const say = useCallback((msg: string) => {
+  const say = useCallback((msg: string, ms = 3000) => {
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2800);
+    toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
 
   // spread = degrees of arc that must fit on screen (≈ 1° per 111 km)
@@ -61,8 +69,9 @@ export default function App() {
   const flyHome = useCallback(() => setFocus({ lat: 28, lng: 8, home: true, key: Date.now() }), []);
 
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  const later = (fn: () => void, ms: number) => { timers.current.push(setTimeout(fn, ms)); };
 
-  const showRoute = useCallback((r: Route, animate = true) => {
+  const showRoute = useCallback((r: Route, animate = true, then?: () => void) => {
     clearTimers();
     setRoute(r);
     const { center, spread } = frame(r.stops);
@@ -70,7 +79,8 @@ export default function App() {
     if (!animate) { setRevealed(r.stops.length); return; }
     setRevealed(0);
     // Reveal stops one by one once the camera has mostly arrived.
-    r.stops.forEach((_, i) => timers.current.push(setTimeout(() => setRevealed(i + 1), 1100 + i * 700)));
+    r.stops.forEach((_, i) => later(() => setRevealed(i + 1), 1100 + i * 650));
+    if (then) later(then, 1100 + r.stops.length * 650 + 500);
   }, [flyTo, setRoute]);
 
   // Measure the bottom UI so the globe centres in the free space above it.
@@ -86,58 +96,56 @@ export default function App() {
   useEffect(() => {
     if (!globeReady || !routeLoaded || didRestore.current) return;
     didRestore.current = true;
-    if (route) showRoute(route, false);
+    if (route?.stops?.length) showRoute(route, false);
   }, [globeReady, routeLoaded, route, showRoute]);
 
   useEffect(() => () => { clearTimers(); abortRef.current?.abort(); }, []);
 
-  // ---------- analysis ----------
-  const startAnalysis = (label: string, cancellable: boolean) => {
+  // ---------- progress card ----------
+  const startProgress = (label: string, steps: string[], cancellable: boolean, stepAt: number[]) => {
     clearTimers();
-    setAnalysis({ label, step: 0, cancellable });
-    timers.current.push(setTimeout(() => setAnalysis((a) => (a ? { ...a, step: 1 } : a)), 1200));
-    timers.current.push(setTimeout(() => setAnalysis((a) => (a ? { ...a, step: 2 } : a)), 4200));
+    setAnalysis({ label, steps, step: 0, cancellable });
+    stepAt.forEach((ms, i) => later(() => setAnalysis((a) => (a ? { ...a, step: Math.max(a.step, i + 1) } : a)), ms));
   };
+  const stopProgress = () => { clearTimers(); setAnalysis(null); };
 
+  // ---------- video → places → route ----------
   const runDemo = (routeId: string) => {
     const base = DEMO_ROUTES.find((r) => r.id === routeId);
     if (!base) return;
-    startAnalysis(`Ejemplo · ${base.name}`, false);
-    timers.current.push(setTimeout(() => setAnalysis((a) => (a ? { ...a, step: 1 } : a)), 700));
-    timers.current.push(setTimeout(() => setAnalysis((a) => (a ? { ...a, step: 2 } : a)), 1400));
-    timers.current.push(setTimeout(() => {
+    startProgress(`Ejemplo · ${base.name}`, VIDEO_STEPS, false, [700, 1400]);
+    later(() => {
       setAnalysis(null);
-      showRoute({ ...base, id: `${base.id}-${uid()}` });
+      showRoute({ ...base, id: `${base.id}-${uid()}`, kind: "demo" });
       say(`${base.stops.length} lugares · ${base.name}`);
-    }, 2100));
+    }, 2100);
+  };
+
+  const buildFromPicked = (result: AnalyzeOk, picked: Candidate[]) => {
+    const r = routeFromCandidates(result.name, picked, result.source, result.sources);
+    showRoute(r);
+    say(`Ruta creada con ${picked.length} ${picked.length === 1 ? "lugar" : "lugares"}`);
   };
 
   const analyze = async (payload: { url?: string; text?: string }) => {
     abortRef.current?.abort();
     const ctl = new AbortController();
     abortRef.current = ctl;
-    startAnalysis(payload.url || `«${payload.text!.slice(0, 60)}${payload.text!.length > 60 ? "…" : ""}»`, true);
+    const label = payload.url || `«${payload.text!.slice(0, 60)}${payload.text!.length > 60 ? "…" : ""}»`;
+    startProgress(label, VIDEO_STEPS, true, payload.url ? [2500, 7000] : [800, 2500]);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctl.signal,
       });
       let data: AnalyzeResponse;
       try { data = await res.json(); } catch { data = { ok: false, code: "upstream", message: "El servidor no ha respondido bien." }; }
-      clearTimers();
-      setAnalysis(null);
-      if (data.ok) {
-        setInput("");
-        showRoute(data.route);
-        const n = data.route.stops.length;
-        say(`${n} ${n === 1 ? "lugar detectado" : "lugares detectados"} · ${data.route.name}`);
-      } else if (data.code === "need_text" && payload.url) {
-        setSheet({ kind: "describe", url: payload.url, message: data.message });
-      } else {
-        say(data.message);
-      }
+      stopProgress();
+      if (!data.ok) { say(data.message, 5000); return; }
+      setInput("");
+      if (data.candidates.length === 1) buildFromPicked(data, data.candidates);
+      else setSheet({ kind: "pick", result: data });
     } catch (e: any) {
-      clearTimers();
-      setAnalysis(null);
+      stopProgress();
       say(e?.name === "AbortError" ? "Análisis cancelado" : "Sin conexión con el servidor. Vuelve a intentarlo.");
     }
   };
@@ -151,6 +159,27 @@ export default function App() {
     if (toUrl(val)) { say("Ese enlace no es de TikTok ni de Instagram"); return; }
     if (val.length < 12) { say("Escribe un poco más: qué lugares salen en el vídeo"); return; }
     analyze({ text: val });
+  };
+
+  // ---------- plan a trip ----------
+  const plan = async (req: PlanRequest, label: string) => {
+    setSheet(null);
+    abortRef.current?.abort();
+    const ctl = new AbortController();
+    abortRef.current = ctl;
+    startProgress(label, PLAN_STEPS, true, [2500, 7000]);
+    try {
+      const res = await fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req), signal: ctl.signal });
+      let data: PlanResponse;
+      try { data = await res.json(); } catch { data = { ok: false, code: "upstream", message: "El servidor no ha respondido bien." }; }
+      stopProgress();
+      if (!data.ok) { say(data.message, 5000); return; }
+      showRoute(data.route, true, () => setSheet({ kind: "itinerary" }));
+      say(`${data.route.name} · ${data.route.days} días`);
+    } catch (e: any) {
+      stopProgress();
+      say(e?.name === "AbortError" ? "Cancelado" : "Sin conexión con el servidor. Vuelve a intentarlo.");
+    }
   };
 
   // ---------- pins ----------
@@ -168,8 +197,7 @@ export default function App() {
   };
 
   const saveTrip = () => {
-    if (!route) return;
-    if (trips.some((t) => t.id === route.id)) return;
+    if (!route || trips.some((t) => t.id === route.id)) return;
     setTrips((t) => [route, ...t]);
     const fresh: Pin[] = route.stops
       .filter((s) => !pins.some((p) => p.name.toLowerCase() === s.name.toLowerCase()))
@@ -180,7 +208,9 @@ export default function App() {
 
   const shareRoute = async () => {
     if (!route) return;
-    const text = `${route.name} (${route.days} días)\n` + route.stops.map((s, i) => `${i + 1}. ${s.name} — ${s.when}`).join("\n");
+    const lines = route.stops.map((s, i) => `${i + 1}. ${s.name} — ${s.when}`);
+    if (route.budget) lines.push(`Presupuesto estimado: ${route.budget.total.toLocaleString("es-ES")} €`);
+    const text = `${route.name} (${route.days} días)\n${lines.join("\n")}`;
     try {
       if (navigator.share) { await navigator.share({ title: route.name, text }); return; }
       await navigator.clipboard.writeText(text);
@@ -244,7 +274,7 @@ export default function App() {
               <span className="analysis-label mono">{analysis.label}</span>
               {analysis.cancellable && <button className="btn-small" type="button" onClick={() => abortRef.current?.abort()}>Cancelar</button>}
             </div>
-            {STEPS.map((s, i) => (
+            {analysis.steps.map((s, i) => (
               <div key={s} className={`step ${i < analysis.step ? "done" : i === analysis.step ? "active" : ""}`}><i />{s}</div>
             ))}
           </section>
@@ -255,7 +285,10 @@ export default function App() {
             <div className="routecard-head">
               <div>
                 <div className="routecard-title">{route.name}{route.ai && <span className="tag">IA</span>}</div>
-                <div className="routecard-meta mono">{route.days} DÍAS · {route.stops.length} PARADAS · {Math.round(routeKm(route.stops)).toLocaleString("es-ES")} KM</div>
+                <div className="routecard-meta mono">
+                  {route.days} DÍAS · {route.stops.length} PARADAS · {Math.round(routeKm(route.stops)).toLocaleString("es-ES")} KM
+                  {route.budget ? ` · ~${route.budget.total.toLocaleString("es-ES")} €` : ""}
+                </div>
               </div>
               <div className="routecard-actions">
                 <button className="link" type="button" onClick={() => setSheet({ kind: "itinerary" })}>Itinerario</button>
@@ -267,7 +300,8 @@ export default function App() {
             <div className="chips">
               {route.stops.map((s, i) => (
                 <button key={i} type="button" className="chip" onClick={() => flyTo(s.lat, s.lng, 1.2)}>
-                  <em>{i + 1} · {s.when.toUpperCase()}</em><b>{s.name}</b><span>{s.sub}</span>
+                  <PlacePhoto className="chip-photo" q={{ name: s.name, wiki: s.wiki, country: s.country }} />
+                  <span className="chip-text"><em>{i + 1} · {s.when.toUpperCase()}</em><b>{s.name}</b><span>{s.sub}</span></span>
                 </button>
               ))}
             </div>
@@ -284,10 +318,13 @@ export default function App() {
           <button className="btn-primary" type="submit" disabled={!!analysis}>{analysis ? "…" : "SUBIR"}</button>
         </form>
 
-        {!route && !analysis && (
-          <div className="examples">
-            <span>Prueba:</span>
-            {EXAMPLES.map((ex) => <button key={ex.routeId} type="button" onClick={() => runDemo(ex.routeId)}>{ex.label}</button>)}
+        {!analysis && (
+          <div className="quick">
+            <button type="button" className="quick-plan" onClick={() => setSheet({ kind: "planner" })}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z" /></svg>
+              Crea tu viaje
+            </button>
+            {!route && EXAMPLES.map((ex) => <button key={ex.routeId} type="button" className="quick-ex" onClick={() => runDemo(ex.routeId)}>{ex.label}</button>)}
           </div>
         )}
       </div>
@@ -301,50 +338,22 @@ export default function App() {
         const p = pins.find((x) => x.id === sheet.id);
         if (!p) return null;
         return (
-          <Sheet label={p.name} onClose={() => setSheet(null)}>
-            <span className="eyebrow">{p.type === "visitado" ? "HE ESTADO" : "QUIERO IR"}</span>
-            <h2>{p.name}</h2>
-            <p className="sub">{coords(p.lat, p.lng)}</p>
-            <div className="actions">
-              <button className="btn btn-ghost" type="button" onClick={() => { togglePin(p.id); setSheet(null); say(p.type === "visitado" ? `${p.name} movido a «Quiero ir»` : `¡${p.name} visitado!`); }}>
-                {p.type === "visitado" ? "Mover a Quiero ir" : "Ya he estado"}
-              </button>
-              <button className="btn btn-danger" type="button" onClick={() => { removePin(p.id); setSheet(null); }}>Quitar</button>
-            </div>
-          </Sheet>
+          <PinSheet pin={p} onClose={() => setSheet(null)}
+            onToggle={() => { togglePin(p.id); setSheet(null); say(p.type === "visitado" ? `${p.name} movido a «Quiero ir»` : `¡${p.name} visitado!`); }}
+            onRemove={() => { removePin(p.id); setSheet(null); }} />
         );
       })()}
 
-      {sheet?.kind === "describe" && (
-        <DescribeSheet url={sheet.url} message={sheet.message} onClose={() => setSheet(null)}
-          onSubmit={(text) => { setSheet(null); analyze({ url: sheet.url, text }); }} />
+      {sheet?.kind === "pick" && (
+        <PickSheet result={sheet.result} onClose={() => setSheet(null)}
+          onConfirm={(picked) => { const r = sheet.result; setSheet(null); buildFromPicked(r, picked); }} />
       )}
 
+      {sheet?.kind === "planner" && <PlannerSheet onClose={() => setSheet(null)} onSubmit={plan} />}
+
       {sheet?.kind === "itinerary" && route && (
-        <Sheet label={route.name} onClose={() => setSheet(null)}>
-          <span className="eyebrow">{route.ai ? "RUTA DETECTADA EN TU VÍDEO" : "RUTA DE EJEMPLO"}</span>
-          <h2>{route.name}</h2>
-          <p className="sub">{route.days} DÍAS · {route.stops.length} PARADAS · {Math.round(routeKm(route.stops)).toLocaleString("es-ES")} KM</p>
-          {route.sources && <Sources s={route.sources} />}
-          <div className="timeline">
-            {route.stops.map((s, i) => (
-              <div className="day" key={i}>
-                <div className="track"><span className="node">{i + 1}</span>{i < route.stops.length - 1 && <span className="line" />}</div>
-                <div className="day-body">
-                  <em>{s.when.toUpperCase()}</em>
-                  <b>{s.name}</b>
-                  {s.note && <p>{s.note}</p>}
-                  <button type="button" onClick={() => { setSheet(null); flyTo(s.lat, s.lng, 1.2); }}>Ver en el globo</button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {route.source && <a className="link" href={route.source} target="_blank" rel="noopener noreferrer" style={{ alignSelf: "flex-start", textDecoration: "none" }}>Abrir el vídeo original ↗</a>}
-          <div className="actions">
-            <button className="btn btn-ghost" type="button" onClick={shareRoute}>Compartir</button>
-            <button className="btn btn-solid" type="button" disabled={saved} onClick={saveTrip}>{saved ? "Guardada ✓" : "Guardar en mis viajes"}</button>
-          </div>
-        </Sheet>
+        <ItinerarySheet route={route} saved={saved} onClose={() => setSheet(null)} onSave={saveTrip} onShare={shareRoute}
+          onShow={(s) => { setSheet(null); flyTo(s.lat, s.lng, 1.2); }} />
       )}
 
       {sheet?.kind === "trips" && (
@@ -364,10 +373,21 @@ export default function App() {
 
 // ---------------------------------------------------------------- sheets
 
-function Sources({ s }: { s: AnalyzeSources }) {
-  const list = [s.caption && "Descripción", s.placeTag && "Lugar etiquetado", s.subtitles && "Subtítulos", s.audio && "Audio", s.userText && "Tu texto"].filter(Boolean);
-  if (!list.length) return null;
-  return <div className="sources" aria-label="Fuentes usadas">{list.map((x) => <span key={x as string}>{x}</span>)}</div>;
+function PinSheet({ pin, onClose, onToggle, onRemove }: { pin: Pin; onClose: () => void; onToggle: () => void; onRemove: () => void }) {
+  const { info } = usePlaceInfo({ name: pin.name });
+  return (
+    <Sheet label={pin.name} onClose={onClose}>
+      <PlacePhoto className="hero-photo" large q={{ name: pin.name }} />
+      <span className="eyebrow">{pin.type === "visitado" ? "HE ESTADO" : "QUIERO IR"}</span>
+      <h2>{pin.name}</h2>
+      <p className="sub">{coords(pin.lat, pin.lng)}</p>
+      {info?.extract && <p className="note">{info.extract.length > 260 ? info.extract.slice(0, 260).replace(/\s\S*$/, "") + "…" : info.extract}</p>}
+      <div className="actions">
+        <button className="btn btn-ghost" type="button" onClick={onToggle}>{pin.type === "visitado" ? "Mover a Quiero ir" : "Ya he estado"}</button>
+        <button className="btn btn-danger" type="button" onClick={onRemove}>Quitar</button>
+      </div>
+    </Sheet>
+  );
 }
 
 function AddSheet({ lat, lng, onClose, onSave }: { lat: number; lng: number; onClose: () => void; onSave: (p: Omit<Pin, "id">) => void }) {
@@ -394,24 +414,6 @@ function AddSheet({ lat, lng, onClose, onSave }: { lat: number; lng: number; onC
   );
 }
 
-function DescribeSheet({ url, message, onClose, onSubmit }: { url: string; message: string; onClose: () => void; onSubmit: (t: string) => void }) {
-  const [text, setText] = useState("");
-  return (
-    <Sheet label="Describe el vídeo" onClose={onClose}>
-      <span className="eyebrow mono" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
-      <h2>¿Qué sale en el vídeo?</h2>
-      <p className="note">{message}</p>
-      <label htmlFor="desc" className="sr">Descripción del vídeo</label>
-      <textarea id="desc" className="field" maxLength={4000} autoFocus value={text} onChange={(e) => setText(e.target.value)}
-        placeholder="Ej.: 10 días en Japón. Empezamos en Tokio (Shibuya, Asakusa), subimos al Fuji desde Hakone, 3 días en Kioto, Nara de excursión y terminamos en Osaka…" />
-      <div className="actions">
-        <button className="btn btn-ghost" type="button" onClick={onClose}>Cancelar</button>
-        <button className="btn btn-solid" type="button" disabled={text.trim().length < 12} onClick={() => onSubmit(text.trim())}>Crear ruta</button>
-      </div>
-    </Sheet>
-  );
-}
-
 function TripsSheet(props: {
   pins: Pin[]; trips: Route[]; onClose: () => void;
   onPin: (p: Pin) => void; onRemovePin: (id: string) => void;
@@ -433,11 +435,11 @@ function TripsSheet(props: {
       <div className="list">
         {tab === "trips" ? (
           trips.length ? trips.map((t) => (
-            <Row key={t.id} color="var(--route)" title={t.name} sub={`${t.days} días · ${t.stops.map((s) => s.name).join(" → ")}`}
-              onOpen={() => props.onTrip(t)} onRemove={() => props.onRemoveTrip(t.id)} />
-          )) : <div className="empty">Aún no has guardado rutas.<br />Sube un vídeo y pulsa «Guardar en mis viajes».</div>
+            <Row key={t.id} q={{ name: t.stops[0]?.name || t.name, wiki: t.stops[0]?.wiki, country: t.stops[0]?.country }} title={t.name}
+              sub={`${t.days} días · ${t.stops.map((s) => s.name).join(" → ")}`} onOpen={() => props.onTrip(t)} onRemove={() => props.onRemoveTrip(t.id)} />
+          )) : <div className="empty">Aún no has guardado rutas.<br />Sube un vídeo o crea un viaje y pulsa «Guardar en mis viajes».</div>
         ) : items.length ? items.map((p) => (
-          <Row key={p.id} color={p.type === "visitado" ? "var(--visited)" : "var(--wishlist)"} title={p.name} sub={coords(p.lat, p.lng)}
+          <Row key={p.id} q={{ name: p.name }} dot={p.type === "visitado" ? "var(--visited)" : "var(--wishlist)"} title={p.name} sub={coords(p.lat, p.lng)}
             onOpen={() => props.onPin(p)} onRemove={() => props.onRemovePin(p.id)} />
         )) : <div className="empty">{tab === "visitado" ? "Toca el globo donde hayas estado para empezar tu mapa." : "Toca el globo o guarda una ruta para llenar tu lista."}</div>}
       </div>
@@ -447,11 +449,13 @@ function TripsSheet(props: {
   );
 }
 
-function Row({ color, title, sub, onOpen, onRemove }: { color: string; title: string; sub: string; onOpen: () => void; onRemove: () => void }) {
+function Row({ q, dot, title, sub, onOpen, onRemove }: { q: { name: string; wiki?: string; country?: string }; dot?: string; title: string; sub: string; onOpen: () => void; onRemove: () => void }) {
   return (
     <div className="item">
-      <i className="dot" style={{ background: color, width: 10, height: 10, margin: 0 }} />
-      <button type="button" className="item-main" onClick={onOpen}><b>{title}</b><span>{sub}</span></button>
+      <PlacePhoto className="item-photo" q={q} />
+      <button type="button" className="item-main" onClick={onOpen}>
+        <b>{dot && <i className="dot" style={{ background: dot }} />}{title}</b><span>{sub}</span>
+      </button>
       <button type="button" className="x" aria-label={`Quitar ${title}`} onClick={onRemove}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>

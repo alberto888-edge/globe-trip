@@ -6,12 +6,17 @@ Es una app web (Next.js) que se instala en el iPhone como una app más.
 
 ## Cómo analiza un vídeo
 
-1. **Lee el enlace** (`lib/video.ts`):
-   - **TikTok**: descripción, lugar etiquetado, subtítulos automáticos y, si hay `OPENAI_API_KEY` y el vídeo no trae subtítulos, la transcripción del audio.
-   - **Instagram**: la descripción (Instagram no deja leer más desde fuera).
-2. **Claude extrae la ruta** (`lib/extract.ts`): lugares concretos, orden lógico, reparto de días y coordenadas. La respuesta se valida antes de usarla.
-3. **Afina coordenadas** con Mapbox si hay `MAPBOX_TOKEN` (opcional).
-4. Si el vídeo no se puede leer (privado, bloqueado, o una descripción sin lugares), la app te pide que pegues la descripción o escribas los sitios.
+1. **Lee el enlace** (`lib/video.ts`). Resuelve los enlaces cortos (`vm.tiktok.com`) y obtiene la descripción, la portada y el vídeo mediante un resolvedor público (tikwm), con la web de TikTok como respaldo (lugar etiquetado y subtítulos).
+2. **Mira el vídeo** (`lib/frames.ts`): lo descarga y saca 8 fotogramas repartidos con ffmpeg. En los carruseles de fotos usa las fotos. En Instagram, la portada.
+3. **Claude ve los fotogramas** (`lib/extract.ts`): lee los textos de pantalla («📍 Kioto»), reconoce lugares y usa la descripción como apoyo. Devuelve cada lugar con coordenadas, días recomendados y en qué fotograma aparece.
+4. **Tú eliges** qué lugares te gustan (cuestionario con fotos del propio vídeo) y se crea la ruta.
+5. Si hay `OPENAI_API_KEY` y el TikTok no tiene subtítulos, también transcribe el audio (opcional).
+
+El mismo enlace pegado dos veces se responde desde caché: no gasta y tarda milisegundos.
+
+## Crea tu viaje
+
+Destinos con fotos, estilos de viaje (playas, montaña, gastronomía…) o texto libre; días, viajeros, presupuesto (mochilero / medio / alto, con máximo opcional) y ciudad de salida. Claude propone la ruta, reparte los días y estima un presupuesto por partidas en euros, con consejos (`/api/plan`).
 
 ## Ponerla en marcha
 
@@ -36,11 +41,12 @@ npm run dev                  # http://localhost:3000
 | Variable | ¿Obligatoria? | Para qué |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Sí | Claude extrae los lugares. [Crear clave](https://console.anthropic.com/settings/keys) |
-| `NEXT_PUBLIC_MAPBOX_TOKEN` | Recomendada | Imágenes de satélite nítidas al hacer zoom. Token **público** (`pk.…`), restringido a tu dominio de Vercel. [Crear token](https://account.mapbox.com/access-tokens/) |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | Recomendada | Globo con imagen de satélite en todos los niveles de zoom (sin él, usa la textura Blue Marble). Token **público** (`pk.…`), restringido a tu dominio de Vercel. [Crear token](https://account.mapbox.com/access-tokens/) |
 | `OPENAI_API_KEY` | Opcional | Transcribe el audio de los TikTok sin subtítulos |
 | `MAPBOX_TOKEN` | Opcional | Afina coordenadas en el servidor (puede ser el mismo token) |
 | `ANTHROPIC_MODEL` | Opcional | Por defecto `claude-sonnet-5` |
 | `RATE_LIMIT_PER_10_MIN` | Opcional | Análisis por visitante cada 10 min (por defecto 10) |
+| `TIKTOK_RESOLVER_URL` | Opcional | Otro servicio para leer TikTok con la misma respuesta que tikwm (por defecto `https://www.tikwm.com/api/?hd=0&url=`) |
 
 4. Pulsa **Redeploy** para que coja las variables. Las `NEXT_PUBLIC_…` se leen al compilar, así que también hace falta redesplegar cuando las cambies.
 
@@ -50,8 +56,8 @@ Abre tu URL de Vercel en Safari → botón **Compartir** → **Añadir a pantall
 
 ## Coste aproximado
 
-- **Claude**: un análisis manda unos pocos miles de tokens. Son céntimos por vídeo; mira los precios del modelo en tu consola de Anthropic.
-- **Mapbox**: las teselas de satélite tienen un tramo gratuito mensual amplio; solo se piden al acercarte mucho.
+- **Claude**: un vídeo son unos 8 fotogramas + texto (≈6.000 tokens de entrada). Con Sonnet 5 ≈ 2 céntimos por vídeo nuevo; con Haiku 4.5 (`ANTHROPIC_MODEL=claude-haiku-4-5-20251001`) ≈ 1 céntimo. Un plan de viaje ≈ 1-2 céntimos.
+- **Mapbox**: las teselas de satélite tienen un tramo gratuito mensual amplio; cada usuario carga unas decenas por sesión.
 - **OpenAI** (opcional): solo si un TikTok no trae subtítulos.
 
 El límite por visitante (`RATE_LIMIT_PER_10_MIN`) evita que alguien con tu enlace te gaste la clave. Es por instancia del servidor; para un límite estricto, cámbialo por Vercel KV o Upstash.
@@ -61,14 +67,21 @@ El límite por visitante (`RATE_LIMIT_PER_10_MIN`) evita que alguien con tu enla
 ```
 app/
   page.tsx              → la app
-  api/analyze/route.ts  → POST {url?, text?} → ruta
+  api/analyze/route.ts  → POST {url?, text?} → lugares del vídeo
+  api/plan/route.ts     → POST {destino, días, presupuesto…} → viaje con presupuesto
   manifest.ts           → instalación como app (PWA)
 components/
   App.tsx               → pantallas, estado y flujos
   GlobeCanvas.tsx       → globo 3D (react-globe.gl): cámara, zoom, alfileres, arcos
   Sheet.tsx             → hojas deslizables inferiores
+  PickSheet.tsx         → «¿Cuáles te han gustado?»
+  PlannerSheet.tsx      → «Crea tu viaje»
+  ItinerarySheet.tsx    → itinerario con fotos y presupuesto
 lib/
-  video.ts              → leer TikTok / Instagram
+  video.ts              → leer TikTok / Instagram (texto + imágenes)
+  frames.ts             → fotogramas con ffmpeg
+  labels.ts, places.json → nombres de países y ciudades en el globo, por zoom
+  wiki.ts               → fotos y descripción de cada lugar (Wikipedia)
   extract.ts            → Claude → ruta validada
   geo.ts                → distancias, encuadre de cámara
   demo.ts               → rutas de ejemplo y lugares iniciales
@@ -86,5 +99,6 @@ npm run build
 
 ## Límites conocidos
 
-- TikTok e Instagram cambian su web a menudo. Si un día deja de leerse la descripción, el fallo está aislado en `lib/video.ts` y la app pasa a pedir el texto a mano.
-- Desde los servidores de Vercel, TikTok a veces solo devuelve la descripción (vía oEmbed) y no los subtítulos. Con la descripción suele bastar.
+- Leer TikTok depende de un resolvedor público no oficial (tikwm). Si deja de funcionar, cámbialo con `TIKTOK_RESOLVER_URL` o edita `lib/video.ts`; la app sigue usando la web de TikTok y su oEmbed como respaldo.
+- Instagram solo deja leer la descripción y la portada desde fuera.
+- Las fotos vienen de Wikipedia: los lugares muy pequeños pueden no tener.
