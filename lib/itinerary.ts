@@ -1,4 +1,5 @@
 import type { Candidate, Route, Stop } from "./types";
+import { orderStops } from "./geo";
 
 /** "Día 3" or "Días 3–5" for each stop, from each stop's length in days. */
 export function withDayRanges<T extends { days?: number }>(stops: T[]): (T & { when: string })[] {
@@ -11,9 +12,9 @@ export function withDayRanges<T extends { days?: number }>(stops: T[]): (T & { w
   });
 }
 
-/** Builds a route from the places the person kept, in the video's order. */
-export function routeFromCandidates(name: string, picked: Candidate[], source: string | null, sources?: Route["sources"]): Route {
-  const stops: Stop[] = withDayRanges(picked).map((c) => ({
+/** Builds a route from the places the person kept: the video's order, unless that zig-zags. */
+export function routeFromCandidates(name: string, picked: Candidate[], source: string | null, sources?: Route["sources"], risks?: Route["risks"]): Route {
+  const stops: Stop[] = withDayRanges(orderStops(picked)).map((c) => ({
     name: c.name, country: c.country, sub: c.sub, note: c.note, lat: c.lat, lng: c.lng, days: c.days, wiki: c.wiki, when: c.when,
   }));
   return {
@@ -25,5 +26,6 @@ export function routeFromCandidates(name: string, picked: Candidate[], source: s
     ai: true,
     source,
     sources,
+    risks,
   };
 }

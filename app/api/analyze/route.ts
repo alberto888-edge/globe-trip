@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { name, candidates } = await extractCandidates({ ...ctx, userText: text || undefined }, images);
+    const { name, candidates, risks } = await extractCandidates({ ...ctx, userText: text || undefined }, images);
     const refined = await Promise.all(candidates.map(refineWithMapbox));
     const out: AnalyzeOk = {
       ok: true,
@@ -52,7 +52,9 @@ export async function POST(req: Request) {
         caption: Boolean(ctx.caption), placeTag: Boolean(ctx.placeTag), subtitles: Boolean(ctx.subtitles),
         audio: Boolean(ctx.audioTranscript), userText: Boolean(text), frames: images.length,
       },
+      risks,
     };
+    console.log("[analyze]", JSON.stringify({ url: key || null, ...out.sources, places: refined.length, scopes: refined.map((c) => c.scope) }));
     if (key) {
       cache.set(key, { at: Date.now(), body: out });
       if (cache.size > 300) cache.delete(cache.keys().next().value!);

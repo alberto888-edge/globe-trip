@@ -13,7 +13,7 @@ export interface PlaceQuery { name: string; wiki?: string; country?: string }
 const TTL = 30 * 24 * 3600 * 1000;
 const mem = new Map<string, Promise<PlaceInfo | null>>();
 
-const keyOf = (q: PlaceQuery) => `gt:wiki2:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
+const keyOf = (q: PlaceQuery) => `gt:wiki3:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
 
 async function summary(lang: string, title: string): Promise<PlaceInfo | null> {
   const res = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}?redirect=true`);
@@ -40,20 +40,33 @@ async function search(lang: string, q: string): Promise<string | null> {
   return hits.find((h) => !/^(Aeropuerto|Estación|Anexo|Estadio|Club|Batalla)\b/i.test(h.title))?.title ?? null;
 }
 
+// Article pictures that aren't photos of the place: locator maps, flags, coats of arms, diagrams.
+const NOT_A_PHOTO = /\.svg\/|\b(map|mapa|karte|carte|locator|location|localizaci|situaci|flag|bandera|escudo|coat[_ ]of[_ ]arms|seal|emblem|relief|orthographic|topographic|logo)\b/i;
+const isPhoto = (u?: string) => !!u && !NOT_A_PHOTO.test(decodeURIComponent(u).replace(/[_-]/g, " "));
+
 async function lookup(q: PlaceQuery): Promise<PlaceInfo | null> {
   const attempts: (() => Promise<PlaceInfo | null>)[] = [
     () => (q.wiki ? summary("es", q.wiki) : Promise.resolve(null)),
     () => summary("es", q.name),
     async () => { const t = await search("es", [q.name, q.country].filter(Boolean).join(" ")); return t ? summary("es", t) : null; },
     () => summary("en", q.name),
+    async () => { const t = await search("en", [q.name, q.country].filter(Boolean).join(" ")); return t ? summary("en", t) : null; },
   ];
-  let best: PlaceInfo | null = null;
+  // Text from the first Spanish article; picture from the first article whose picture is a real photo.
+  let text: PlaceInfo | null = null;
+  let anyImage: PlaceInfo | null = null;
   for (const a of attempts) {
     const r = await a().catch(() => null);
-    if (r?.image) return r;
-    best = best || r;
+    if (!r) continue;
+    if (!text && r.extract) text = r;
+    if (r.image && isPhoto(r.thumb || r.image)) {
+      const t = text || r;
+      return { ...t, image: r.image, imageLarge: r.imageLarge, thumb: r.thumb };
+    }
+    if (r.image && !anyImage) anyImage = r;
   }
-  return best;
+  if (!text && !anyImage) return null;
+  return { ...(text || anyImage!), image: anyImage?.image, imageLarge: anyImage?.imageLarge, thumb: anyImage?.thumb };
 }
 
 export function placeInfo(q: PlaceQuery): Promise<PlaceInfo | null> {

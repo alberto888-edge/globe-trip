@@ -14,9 +14,16 @@ Es una app web (Next.js) que se instala en el iPhone como una app más.
 
 El mismo enlace pegado dos veces se responde desde caché: no gasta y tarda milisegundos.
 
+Si el vídeo solo deja claro el país (paisajes sin nombres), la app no inventa una ruta de una parada: propone organizar un viaje a ese país.
+
 ## Crea tu viaje
 
-Destinos con fotos, estilos de viaje (playas, montaña, gastronomía…) o texto libre; días, viajeros, presupuesto (mochilero / medio / alto, con máximo opcional) y ciudad de salida. Claude propone la ruta, reparte los días y estima un presupuesto por partidas en euros, con consejos (`/api/plan`).
+- **Viajes listos** (`lib/trips.ts`): 10 rutas escritas a mano (Vietnam + Camboya + Tailandia, Atacama + Uyuni, Japón, Perú, Islandia…). Se abren al instante y no gastan IA; «Adaptar a mí» las pasa al planificador.
+- **Buscador** con banderas y fotos mientras escribes (países, 9.000 ciudades y sitios turísticos).
+- **Tu viaje**: tipo de viaje (lo imprescindible, explorador, histórico, playero…), experiencia (primera vez / intermedio / experto), días recomendados por la app o elegidos, varios países sí/no, viajeros, presupuesto y ciudad de salida. Claude propone la ruta, reparte los días y estima un presupuesto por partidas en euros, con consejos (`/api/plan`).
+- **Riesgos del viaje**: nivel 1–4 como el Ministerio de Asuntos Exteriores, con enlace a su ficha del país. Los países a los que Exteriores desaconseja viajar se marcan siempre como «No viajar» (`lib/risk.ts`).
+- **Rutas sin vueltas**: si una ruta se cruza consigo misma, se reordena (`orderStops` en `lib/geo.ts`).
+- **Toca una ciudad o un país en el globo** para ver su foto y organizar un viaje allí.
 
 ## Ponerla en marcha
 
@@ -80,12 +87,17 @@ components/
 lib/
   video.ts              → leer TikTok / Instagram (texto + imágenes)
   frames.ts             → fotogramas con ffmpeg
-  labels.ts, places.json → nombres de países y ciudades en el globo, por zoom
+  labels.ts, places.json → nombres de países y ciudades en el globo (por zoom) y buscador
+  trips.ts              → viajes listos
+  risk.ts               → niveles de riesgo y enlaces a Exteriores
   wiki.ts               → fotos y descripción de cada lugar (Wikipedia)
   extract.ts            → Claude → ruta validada
   geo.ts                → distancias, encuadre de cámara
   demo.ts               → rutas de ejemplo y lugares iniciales
 public/textures/        → Tierra (NASA Blue Marble, dominio público), relieve y máscara de océano
+public/cities.json      → ~8.000 ciudades más (se cargan tras abrir la app)
+public/borders.json     → fronteras (Natural Earth 1:50m)
+scripts/                → generan places.json, cities.json y borders.json
 ```
 
 Tus lugares y rutas se guardan en el navegador (`localStorage`). El siguiente paso natural es añadir cuentas de usuario (por ejemplo Supabase) para sincronizarlos entre dispositivos.

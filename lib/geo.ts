@@ -68,3 +68,82 @@ export function altitudeForSpread(spread: number, halfFov: number, margin = 1.45
 export function wholeGlobeAltitude(halfFov: number, fill = 0.86): number {
   return 1 / Math.sin(halfFov * fill) - 1;
 }
+
+// ---------------------------------------------------------------- stop order
+
+const pathKm = (pts: { lat: number; lng: number }[], order: number[]) => {
+  let s = 0;
+  for (let i = 1; i < order.length; i++) s += distanceKm(pts[order[i - 1]], pts[order[i]]);
+  return s;
+};
+
+/** Shortest open path through all points (exact up to 8 points, 2-opt above), optionally starting at `start`. */
+function shortestPath(pts: { lat: number; lng: number }[], start?: number): number[] {
+  const n = pts.length;
+  const idx = [...Array(n).keys()];
+  if (n <= 8) {
+    let best = idx, bestKm = Infinity;
+    const rest = start === undefined ? idx : idx.filter((i) => i !== start);
+    const permute = (arr: number[], k: number) => {
+      if (k === arr.length) {
+        const order = start === undefined ? arr : [start, ...arr];
+        const km = pathKm(pts, order);
+        if (km < bestKm) { bestKm = km; best = order.slice(); }
+        return;
+      }
+      for (let i = k; i < arr.length; i++) {
+        [arr[k], arr[i]] = [arr[i], arr[k]];
+        permute(arr, k + 1);
+        [arr[k], arr[i]] = [arr[i], arr[k]];
+      }
+    };
+    permute(rest.slice(), 0);
+    return best;
+  }
+  const order = start === undefined ? idx : [start, ...idx.filter((i) => i !== start)];
+  for (let improved = true; improved;) {
+    improved = false;
+    for (let i = start === undefined ? 0 : 1; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const cand = [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)];
+        if (pathKm(pts, cand) < pathKm(pts, order) - 1) { order.splice(0, n, ...cand); improved = true; }
+      }
+    }
+  }
+  return order;
+}
+
+/** Does the path cross over itself? (flat lat/lng test, fine at trip scale) */
+function selfCrossing(pts: { lat: number; lng: number }[]): boolean {
+  const ccw = (a: { lat: number; lng: number }, b: { lat: number; lng: number }, c: { lat: number; lng: number }) =>
+    (c.lat - a.lat) * (b.lng - a.lng) > (b.lat - a.lat) * (c.lng - a.lng);
+  for (let i = 0; i < pts.length - 1; i++) {
+    for (let j = i + 2; j < pts.length - 1; j++) {
+      const [a, b, c, d] = [pts[i], pts[i + 1], pts[j], pts[j + 1]];
+      if (Math.abs(a.lng - b.lng) > 180 || Math.abs(c.lng - d.lng) > 180) continue;
+      if (ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Reorders stops when the trip zig-zags: the path crosses over itself (like
+ * Damasco → Palmira → Alepo → back down to Bosra) or is at least 30% longer
+ * than needed. Otherwise the original order is kept, since it may be deliberate
+ * (e.g. climbing slowly to altitude in Peru). Starts where the original started
+ * (usually the arrival airport) unless starting elsewhere is clearly shorter.
+ */
+export function orderStops<T extends { lat: number; lng: number }>(stops: T[]): T[] {
+  if (stops.length < 3) return stops;
+  const idx = [...stops.keys()];
+  const original = pathKm(stops, idx);
+  const fixed = shortestPath(stops, 0);
+  let free = shortestPath(stops);
+  if (distanceKm(stops[free[free.length - 1]], stops[0]) < distanceKm(stops[free[0]], stops[0])) free = free.reverse();
+  const fixedKm = pathKm(stops, fixed), freeKm = pathKm(stops, free);
+  const best = freeKm < fixedKm * 0.85 ? free : fixed;
+  const saving = 1 - pathKm(stops, best) / Math.max(1, original);
+  if (saving < 0.05 || (!selfCrossing(stops) && saving < 0.3)) return stops;
+  return best.map((i) => stops[i]);
+}

@@ -8,11 +8,14 @@ import { detectPlatform, toUrl } from "@/lib/links";
 import { routeFromCandidates } from "@/lib/itinerary";
 import { usePersistentState } from "@/lib/storage";
 import { usePlaceInfo } from "@/lib/wiki";
+import { countryByName, countryName, flag, type PlaceLabel } from "@/lib/labels";
+import { readyRoute } from "@/lib/trips";
+import { RISK_LABEL } from "@/lib/risk";
 import type { Focus } from "./GlobeCanvas";
 import Sheet from "./Sheet";
 import PlacePhoto from "./PlacePhoto";
 import PickSheet from "./PickSheet";
-import PlannerSheet from "./PlannerSheet";
+import PlannerSheet, { type PlannerInit } from "./PlannerSheet";
 import ItinerarySheet from "./ItinerarySheet";
 
 const GlobeCanvas = dynamic(() => import("./GlobeCanvas"), { ssr: false });
@@ -23,8 +26,12 @@ type SheetState =
   | { kind: "itinerary" }
   | { kind: "trips" }
   | { kind: "pick"; result: AnalyzeOk }
-  | { kind: "planner" }
+  | { kind: "planner"; init?: PlannerInit }
+  | { kind: "place"; place: PlacePick }
   | null;
+
+/** A city or country tapped on the globe, or the country a video was about. */
+interface PlacePick { name: string; lat: number; lng: number; kind: "city" | "country"; iso?: string; country?: string; intro?: string; context?: string }
 
 interface Analysis { label: string; steps: string[]; step: number; cancellable: boolean }
 
@@ -122,7 +129,7 @@ export default function App() {
   };
 
   const buildFromPicked = (result: AnalyzeOk, picked: Candidate[]) => {
-    const r = routeFromCandidates(result.name, picked, result.source, result.sources);
+    const r = routeFromCandidates(result.name, picked, result.source, result.sources, result.risks);
     showRoute(r);
     say(`Ruta creada con ${picked.length} ${picked.length === 1 ? "lugar" : "lugares"}`);
   };
@@ -142,6 +149,21 @@ export default function App() {
       stopProgress();
       if (!data.ok) { say(data.message, 5000); return; }
       setInput("");
+      // Only a country or region, no concrete spots: offer to plan a trip there instead of a one-stop "route".
+      if (data.candidates.every((c) => c.scope && c.scope !== "place")) {
+        const c = data.candidates[0];
+        flyTo(c.lat, c.lng, c.scope === "country" ? 14 : 6);
+        setSheet({
+          kind: "place",
+          place: {
+            name: c.name, lat: c.lat, lng: c.lng, kind: c.scope === "country" ? "country" : "city", country: c.scope === "country" ? undefined : c.country,
+            iso: countryByName(c.scope === "country" ? c.name : c.country || "")?.iso,
+            intro: `El vídeo es de ${c.name}, pero no nombra sitios concretos. Te organizo un viaje allí con los mejores lugares.`,
+            context: `Inspirado en un vídeo de ${c.name}: ${[data.name, c.note].filter(Boolean).join(". ")}`.slice(0, 380),
+          },
+        });
+        return;
+      }
       if (data.candidates.length === 1) buildFromPicked(data, data.candidates);
       else setSheet({ kind: "pick", result: data });
     } catch (e: any) {
@@ -180,6 +202,23 @@ export default function App() {
       stopProgress();
       say(e?.name === "AbortError" ? "Cancelado" : "Sin conexión con el servidor. Vuelve a intentarlo.");
     }
+  };
+
+  const runReady = (id: string, travelers: number) => {
+    const r = readyRoute(id, travelers);
+    if (!r) return;
+    setSheet(null);
+    showRoute(r, true, () => setSheet({ kind: "itinerary" }));
+    say(`${r.name} · ${r.days} días`);
+  };
+
+  const adaptInit = (r: Route): PlannerInit => {
+    const countries = [...new Set(r.stops.map((s) => s.country).filter(Boolean) as string[])];
+    return {
+      destination: r.request?.destination || countries.join(", ") || r.stops.map((s) => s.name).slice(0, 4).join(", "),
+      multiCountry: r.request?.multiCountry ?? countries.length > 1,
+      context: r.kind === "video" ? `Inspirado en el vídeo «${r.name}»: ${r.stops.map((s) => s.name).join(", ")}`.slice(0, 380) : undefined,
+    };
   };
 
   // ---------- pins ----------
@@ -224,14 +263,17 @@ export default function App() {
 
   return (
     <>
-      <svg className="watermark" viewBox="0 0 400 800" preserveAspectRatio="xMidYMid slice" fill="none" strokeWidth="1.2" aria-hidden="true">
+      <svg className="watermark" viewBox="0 0 400 800" preserveAspectRatio="xMidYMid slice" fill="none" strokeWidth="0.9" aria-hidden="true">
+        {/* an old chart: graticule, rhumb lines from two compass roses, degree marks */}
+        {[-3, -2, -1, 0, 1, 2, 3].map((k) => <ellipse key={`m${k}`} cx="200" cy="330" rx={Math.abs(k) * 82 || 0.5} ry="250" />)}
+        {[-2, -1, 0, 1, 2].map((k) => <path key={`p${k}`} d={`M-40 ${330 + k * 92}Q200 ${330 + k * 80} 440 ${330 + k * 92}`} />)}
         <circle cx="200" cy="330" r="250" />
-        <ellipse cx="200" cy="330" rx="250" ry="90" />
-        <ellipse cx="200" cy="330" rx="250" ry="175" />
-        <ellipse cx="200" cy="330" rx="90" ry="250" />
-        <ellipse cx="200" cy="330" rx="175" ry="250" />
-        <path d="M200 60v540M-50 330h500" />
-        <g transform="translate(330,700)"><circle r="34" /><path d="M0-46L6-6L46 0L6 6L0 46L-6 6L-46 0L-6-6Z" /></g>
+        <g opacity="0.7">{Array.from({ length: 16 }, (_, i) => { const a = (i * Math.PI) / 8; return <path key={i} d={`M60 690L${60 + Math.cos(a) * 520} ${690 + Math.sin(a) * 520}`} />; })}</g>
+        <g opacity="0.7">{Array.from({ length: 16 }, (_, i) => { const a = (i * Math.PI) / 8; return <path key={i} d={`M350 70L${350 + Math.cos(a) * 520} ${70 + Math.sin(a) * 520}`} />; })}</g>
+        <g transform="translate(60,690)"><circle r="30" /><circle r="22" /><path d="M0-44L6-6L44 0L6 6L0 44L-6 6L-44 0L-6-6Z" /><text y="-50" textAnchor="middle">N</text></g>
+        <g transform="translate(350,70)"><circle r="20" /><path d="M0-30L4-4L30 0L4 4L0 30L-4 4L-30 0L-4-4Z" /></g>
+        {[0, 30, 60, 90, 120, 150].map((d, i) => <text key={d} x={18 + i * 70} y="788">{d}°</text>)}
+        {[60, 30, 0, 30, 60].map((d, i) => <text key={i} x="6" y={150 + i * 92}>{d}°</text>)}
       </svg>
 
       {!globeReady && <div className="loading">Cargando la Tierra…</div>}
@@ -248,6 +290,10 @@ export default function App() {
           onGlobeTap={(lat, lng) => { if (!hinted) setHinted(true); setSheet({ kind: "add", lat, lng }); }}
           onPinTap={(id) => setSheet({ kind: "pin", id })}
           onStopTap={(i) => { const s = route?.stops[i]; if (s) flyTo(s.lat, s.lng, 1.2); }}
+          onLabelTap={(l: PlaceLabel) => {
+            if (!hinted) setHinted(true);
+            setSheet({ kind: "place", place: { name: l.name, lat: l.lat, lng: l.lng, kind: l.kind, iso: l.iso, country: l.kind === "city" ? countryName(l.iso) : undefined } });
+          }}
         />
       </div>
 
@@ -284,7 +330,8 @@ export default function App() {
           <section className="routecard glass" aria-live="polite">
             <div className="routecard-head">
               <div>
-                <div className="routecard-title">{route.name}{route.ai && <span className="tag">IA</span>}</div>
+                <div className="routecard-title">{route.name}{route.ai && <span className="tag">IA</span>}
+                  {route.risks && route.risks.level >= 3 && <span className={`tag tag-risk risk-${route.risks.level}`}>{RISK_LABEL[route.risks.level]}</span>}</div>
                 <div className="routecard-meta mono">
                   {route.days} DÍAS · {route.stops.length} PARADAS · {Math.round(routeKm(route.stops)).toLocaleString("es-ES")} KM
                   {route.budget ? ` · ~${route.budget.total.toLocaleString("es-ES")} €` : ""}
@@ -349,11 +396,21 @@ export default function App() {
           onConfirm={(picked) => { const r = sheet.result; setSheet(null); buildFromPicked(r, picked); }} />
       )}
 
-      {sheet?.kind === "planner" && <PlannerSheet onClose={() => setSheet(null)} onSubmit={plan} />}
+      {sheet?.kind === "planner" && <PlannerSheet init={sheet.init} onClose={() => setSheet(null)} onSubmit={plan} onReady={runReady} />}
+
+      {sheet?.kind === "place" && (
+        <PlaceSheet place={sheet.place} onClose={() => setSheet(null)}
+          onPlan={() => {
+            const p = sheet.place;
+            setSheet({ kind: "planner", init: { destination: p.country ? `${p.name}, ${p.country}` : p.name, context: p.context } });
+          }}
+          onPin={(type) => { const p = sheet.place; addPin({ name: p.name, lat: p.lat, lng: p.lng, type }); setSheet(null); }} />
+      )}
 
       {sheet?.kind === "itinerary" && route && (
         <ItinerarySheet route={route} saved={saved} onClose={() => setSheet(null)} onSave={saveTrip} onShare={shareRoute}
-          onShow={(s) => { setSheet(null); flyTo(s.lat, s.lng, 1.2); }} />
+          onShow={(s) => { setSheet(null); flyTo(s.lat, s.lng, 1.2); }}
+          onAdapt={route.kind === "demo" ? undefined : () => setSheet({ kind: "planner", init: adaptInit(route) })} />
       )}
 
       {sheet?.kind === "trips" && (
@@ -372,6 +429,27 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------- sheets
+
+function PlaceSheet({ place, onClose, onPlan, onPin }: { place: PlacePick; onClose: () => void; onPlan: () => void; onPin: (t: PinType) => void }) {
+  const { info } = usePlaceInfo({ name: place.name, country: place.country });
+  const f = flag(place.iso);
+  return (
+    <Sheet label={place.name} onClose={onClose}>
+      <PlacePhoto className="hero-photo" large q={{ name: place.name, country: place.country }} />
+      <span className="eyebrow">{f && <span className="eyebrow-flag">{f}</span>}{place.kind === "country" ? "PAÍS" : (place.country || "LUGAR").toUpperCase()}</span>
+      <h2>{place.name}</h2>
+      {place.intro && <p className="note note-strong">{place.intro}</p>}
+      {info?.extract && <p className="note">{info.extract.length > 280 ? info.extract.slice(0, 280).replace(/\s\S*$/, "") + "…" : info.extract}</p>}
+      <button className="btn btn-solid btn-wide" type="button" onClick={onPlan}>
+        Organizar un viaje {place.kind === "country" ? "por" : "a"} {place.name}
+      </button>
+      <div className="row2">
+        <button type="button" className="toggle t-wishlist" onClick={() => onPin("wishlist")}>Quiero ir</button>
+        <button type="button" className="toggle t-visitado" onClick={() => onPin("visitado")}>He estado</button>
+      </div>
+    </Sheet>
+  );
+}
 
 function PinSheet({ pin, onClose, onToggle, onRemove }: { pin: Pin; onClose: () => void; onToggle: () => void; onRemove: () => void }) {
   const { info } = usePlaceInfo({ name: pin.name });

@@ -7,7 +7,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { Pin, Route } from "@/lib/types";
 import { altitudeForSpread, distanceKm, wholeGlobeAltitude } from "@/lib/geo";
-import { visibleLabels, type PlaceLabel } from "@/lib/labels";
+import { loadMorePlaces, visibleLabels, type PlaceLabel } from "@/lib/labels";
+
+// Satellite oceans come out almost black. Lift water to a light, clear blue in every
+// textured material on the globe (the satellite tiles and the fallback texture), keeping
+// the texture's own detail. Water = bluer than it is red or green, and not bright
+// (so shallow turquoise lagoons and snow keep their colour). Tuned on real Mapbox tiles.
+const WATER_GLSL = `
+#ifdef USE_MAP
+{
+  vec3 sc = pow(max(diffuseColor.rgb, vec3(0.0)), vec3(1.0 / 2.2));
+  float lum = dot(sc, vec3(0.3, 0.59, 0.11));
+  float water = smoothstep(0.012, 0.05, sc.b - sc.r) * smoothstep(-0.03, 0.01, sc.b - sc.g) * (1.0 - smoothstep(0.3, 0.5, lum));
+  vec3 lifted = mix(vec3(0.30, 0.56, 0.78), vec3(0.56, 0.80, 0.88), smoothstep(0.0, 0.3, lum)) + (sc - lum) * 0.5;
+  sc = mix(sc, clamp(lifted, 0.0, 1.0), water);
+  diffuseColor.rgb = pow(sc, vec3(2.2));
+}
+#endif
+`;
+const chunks = THREE.ShaderChunk as unknown as Record<string, string>;
+if (!chunks.map_fragment.includes("lifted")) chunks.map_fragment += WATER_GLSL;
 
 /** Where the camera should fly. `spread` = degrees of arc that must fit on screen; `home` = whole globe. */
 export interface Focus { lat: number; lng: number; spread?: number; home?: boolean; key: number; ms?: number }
@@ -21,6 +40,7 @@ interface Props {
   onGlobeTap: (lat: number, lng: number) => void;
   onPinTap: (id: string) => void;
   onStopTap: (index: number) => void;
+  onLabelTap: (label: PlaceLabel) => void;
   onReady?: () => void;
   onInteract?: () => void;
 }
@@ -104,6 +124,40 @@ export default function GlobeCanvas(props: Props) {
     const t = setTimeout(() => finish("off"), 3500);
     return () => clearTimeout(t);
   }, []);
+
+  // Bigger list of towns arrives a moment after start-up; redraw the labels when it does.
+  useEffect(() => {
+    loadMorePlaces().then((ok) => { if (ok) setView((v) => ({ ...v })); });
+  }, []);
+
+  // Country borders: one thin line mesh, just above the ground.
+  useEffect(() => {
+    const g = globeRef.current;
+    if (!ready || !g) return;
+    let live = true;
+    let lines: THREE.LineSegments | null = null;
+    fetch("/borders.json").then((r) => r.json()).then((data: number[][]) => {
+      if (!live) return;
+      const pos: number[] = [];
+      for (const l of data) {
+        let prev = g.getCoords(l[1], l[0], 0.0007);
+        for (let i = 2; i < l.length; i += 2) {
+          const cur = g.getCoords(l[i + 1], l[i], 0.0007);
+          pos.push(prev.x, prev.y, prev.z, cur.x, cur.y, cur.z);
+          prev = cur;
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false }));
+      lines.renderOrder = 1;
+      g.scene().add(lines);
+    }).catch(() => { /* borders are decoration */ });
+    return () => {
+      live = false;
+      if (lines) { g.scene().remove(lines); lines.geometry.dispose(); (lines.material as THREE.Material).dispose(); }
+    };
+  }, [ready]);
 
   // Where the camera is looking, updated a few times a second while moving; drives place labels.
   const [view, setView] = useState({ lat: HOME.lat, lng: HOME.lng, alt: 2.3 });
@@ -203,6 +257,12 @@ export default function GlobeCanvas(props: Props) {
   useEffect(() => {
     if (!ready || !focus || !globeRef.current) return;
     setAutoRotate(false);
+    // Drop any spin left over from auto-rotation or a flick (OrbitControls keeps it as damped
+    // momentum), otherwise the globe keeps drifting after the flight and the route ends off-centre.
+    const c = globeRef.current.controls();
+    c.enableDamping = false;
+    c.update();
+    c.enableDamping = true;
     const altitude = focus.home ? homeAltitude() : altitudeForSpread(focus.spread ?? 3, halfFov());
     globeRef.current.pointOfView({ lat: focus.lat, lng: focus.lng, altitude }, reduceMotion.current ? 0 : focus.ms ?? 1600);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,13 +278,46 @@ export default function GlobeCanvas(props: Props) {
     if (route) route.stops.slice(0, revealed).forEach((s, i) => m.push({ kind: "stop", id: `${route.id}-${i}`, lat: s.lat, lng: s.lng, index: i, name: s.name }));
     return m;
   }, [pins, route, revealed]);
-  // Drop place names that would sit on top of a pin or route stop (e.g. "Luxor" next to stop "Luxor").
+  // Drop place names that would sit on top of a pin or route stop (e.g. "Luxor" next to stop "Luxor"),
+  // then keep only names whose on-screen boxes don't overlap, most important first.
   const labels = useMemo(() => {
     const nearKm = Math.max(8, view.alt * 260);
-    return visibleLabels(view, view.alt).filter((l) => !pinMarkers.some((m) =>
+    const cand = visibleLabels(view, view.alt, 140).filter((l) => !pinMarkers.some((m) =>
       m.name.toLowerCase() === l.name.toLowerCase() || distanceKm(m, l) < nearKm));
-  }, [view, pinMarkers]);
+    const g = ready ? globeRef.current : undefined;
+    if (!g) return cand.slice(0, 40);
+    const boxes: { x1: number; x2: number; y1: number; y2: number }[] = [];
+    const out: PlaceLabel[] = [];
+    for (const l of cand) {
+      const p = g.getScreenCoords(l.lat, l.lng, 0.005);
+      if (!p || !Number.isFinite(p.x)) continue;
+      const wPx = l.kind === "country" ? l.name.length * (l.tier === 1 ? 10 : 9) : l.name.length * 7 + 14;
+      const b = { x1: p.x - wPx / 2 - 5, x2: p.x + wPx / 2 + 5, y1: p.y - 11, y2: p.y + 11 };
+      if (b.x2 < 0 || b.x1 > w || p.y < TOPBAR + 24 || p.y > h - bottomInset) continue; // off screen, or under the header / bottom panel
+      if (boxes.some((o) => o.x1 < b.x2 && b.x1 < o.x2 && o.y1 < b.y2 && b.y1 < o.y2)) continue;
+      boxes.push(b);
+      out.push(l);
+      if (out.length >= 40) break;
+    }
+    return out;
+  }, [view, pinMarkers, ready, w, h, bottomInset]);
   const markers = useMemo(() => [...labels, ...pinMarkers], [labels, pinMarkers]);
+
+  // Place names don't take pointer events (so you can start a drag on top of one);
+  // a tap on the globe checks whether it landed on a name instead.
+  const labelEls = useRef(new Map<HTMLElement, PlaceLabel>());
+  const labelAt = useCallback((x: number, y: number): PlaceLabel | null => {
+    let best: PlaceLabel | null = null, bestD = Infinity;
+    labelEls.current.forEach((lb, el) => {
+      if (!el.isConnected) { labelEls.current.delete(el); return; } // label no longer on the globe
+      if (el.style.opacity === "0") return;
+      const r = el.getBoundingClientRect();
+      if (x < r.left - 10 || x > r.right + 10 || y < r.top - 12 || y > r.bottom + 12) return;
+      const d = Math.hypot(x - (r.left + r.right) / 2, y - (r.top + r.bottom) / 2);
+      if (d < bestD) { bestD = d; best = lb; }
+    });
+    return best;
+  }, []);
 
   const makeMarker = useCallback((d: object) => {
     if ((d as Marker).kind === "country" || (d as Marker).kind === "city") {
@@ -233,6 +326,7 @@ export default function GlobeCanvas(props: Props) {
       el.className = `lb lb-${lb.kind} lb-t${lb.tier}`;
       el.dataset.label = "1";
       el.textContent = lb.name;
+      labelEls.current.set(el, lb);
       return el;
     }
     const mk = d as Exclude<Marker, PlaceLabel>;
@@ -307,7 +401,12 @@ export default function GlobeCanvas(props: Props) {
       animateIn={false}
       onGlobeReady={handleReady}
       onZoom={handleZoom}
-      onGlobeClick={({ lat, lng }) => handlers.current.onGlobeTap(lat, lng)}
+      onGlobeClick={({ lat, lng }, ev) => {
+        const e = ev as MouseEvent | undefined;
+        const lb = e ? labelAt(e.clientX, e.clientY) : null;
+        if (lb) handlers.current.onLabelTap(lb);
+        else handlers.current.onGlobeTap(lat, lng);
+      }}
       htmlElementsData={markers}
       htmlLat="lat"
       htmlLng="lng"

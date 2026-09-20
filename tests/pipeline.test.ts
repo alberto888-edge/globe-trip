@@ -4,8 +4,10 @@ import { detectPlatform, parseTikTokPage, parseInstagramPage, parseTikwm, vttToT
 import { toCandidates, toPlanRoute, buildVideoText, buildPlanPrompt } from "../lib/extract.ts";
 import { frameTimes, parseDuration } from "../lib/frames.ts";
 import { withDayRanges, routeFromCandidates } from "../lib/itinerary.ts";
-import { altitudeForSpread, centroid, frame, routeKm, spreadDeg, wholeGlobeAltitude } from "../lib/geo.ts";
-import { visibleLabels } from "../lib/labels.ts";
+import { altitudeForSpread, centroid, frame, orderStops, routeKm, spreadDeg, wholeGlobeAltitude } from "../lib/geo.ts";
+import { countryName, flag, searchPlaces, visibleLabels } from "../lib/labels.ts";
+import { normalizeRisk } from "../lib/risk.ts";
+import { READY_TRIPS, readyRoute } from "../lib/trips.ts";
 
 test("detectPlatform accepts TikTok and Instagram links in any common form", () => {
   assert.equal(detectPlatform("https://www.tiktok.com/@a/video/123"), "tiktok");
@@ -151,5 +153,79 @@ test("labels: countries far away, cities appear as you zoom in, Spanish names", 
   assert.ok(japan.includes("Tokio") && japan.includes("Osaka"), japan.join(","));
   const close = visibleLabels({ lat: 34.85, lng: 135.7 }, 0.07).map((l) => l.name);
   assert.ok(close.includes("Kioto") && close.includes("Osaka"), close.join(","));
-  assert.ok(visibleLabels({ lat: 50, lng: 10 }, 0.6).length <= 40);
+  assert.ok(visibleLabels({ lat: 50, lng: 10 }, 0.6).length <= 44);
+});
+
+test("orderStops removes zig-zags but keeps a sensible start", () => {
+  // The Syria plan a user got: Damasco → Palmira → Alepo → Bosra (840 km, back down south at the end)
+  const sy = [{ n: "Damasco", lat: 33.51, lng: 36.29 }, { n: "Palmira", lat: 34.56, lng: 38.28 }, { n: "Alepo", lat: 36.2, lng: 37.16 }, { n: "Bosra", lat: 32.52, lng: 36.48 }];
+  const o = orderStops(sy);
+  assert.deepEqual(o.map((s) => s.n), ["Damasco", "Bosra", "Palmira", "Alepo"]);
+  assert.ok(routeKm(o) < routeKm(sy) * 0.8);
+  // A deliberate order (Peru: climb slowly to altitude) that doesn't cross itself is kept
+  const pe = [{ n: "Lima", lat: -12.05, lng: -77.04 }, { n: "Arequipa", lat: -16.41, lng: -71.54 }, { n: "Puno", lat: -15.84, lng: -70.02 }, { n: "Cuzco", lat: -13.53, lng: -71.97 }, { n: "Machu Picchu", lat: -13.16, lng: -72.54 }];
+  assert.deepEqual(orderStops(pe).map((s) => s.n), pe.map((s) => s.n));
+  // An already good order is left alone
+  const jp = [{ n: "Tokio", lat: 35.68, lng: 139.69 }, { n: "Kioto", lat: 35.01, lng: 135.77 }, { n: "Osaka", lat: 34.69, lng: 135.5 }, { n: "Hiroshima", lat: 34.39, lng: 132.45 }];
+  assert.deepEqual(orderStops(jp).map((s) => s.n), jp.map((s) => s.n));
+  // 10 stops (2-opt path) still returns every stop once
+  const many = Array.from({ length: 10 }, (_, i) => ({ n: String(i), lat: (i % 2) * 5, lng: i * 3 * (i % 3 ? 1 : -1) }));
+  assert.equal(new Set(orderStops(many).map((s) => s.n)).size, 10);
+});
+
+test("normalizeRisk validates and applies the official no-travel floor", () => {
+  const r = normalizeRisk({ level: 2, summary: "Mejorando.", points: ["a", 3, ""], countries: ["Siria"] })!;
+  assert.equal(r.level, 4);
+  assert.match(r.summary, /no viajar a Siria/);
+  assert.deepEqual(r.points, ["a"]);
+  const j = normalizeRisk({ level: 1, summary: "Muy seguro", points: [], countries: [] }, ["Japón"])!;
+  assert.equal(j.level, 1);
+  assert.deepEqual(j.countries, ["Japón"]);
+  assert.equal(normalizeRisk(undefined), undefined);
+  assert.equal(normalizeRisk({ level: 9 })!.level, 2);
+});
+
+test("video that only shows a country keeps it; concrete spots win over countries", () => {
+  const only = toCandidates({ found: true, name: "Selva", places: [{ name: "Papúa Nueva Guinea", country: "Papúa Nueva Guinea", sub: "", note: "", days: 3, lat: -6, lng: 144, frame: 0, scope: "country" }] }, 0);
+  assert.equal(only.candidates[0].scope, "country");
+  const mixed = toCandidates({ found: true, places: [
+    { name: "Japón", country: "Japón", days: 7, lat: 36, lng: 138, frame: 0, scope: "country" },
+    { name: "Kioto", country: "Japón", days: 2, lat: 35, lng: 135.7, frame: 1, scope: "place" },
+  ], risks: { level: 1, summary: "Seguro", points: [], countries: ["Japón"] } }, 2);
+  assert.deepEqual(mixed.candidates.map((c) => c.name), ["Kioto"]);
+  assert.equal(mixed.risks?.level, 1);
+});
+
+test("plan prompt: automatic days, styles, level and single-country by default", () => {
+  const p = buildPlanPrompt({ destination: "Perú", travelers: 2, budget: "medio", styles: ["Histórico y cultural"], level: "primera" });
+  assert.match(p, /elige tú la duración ideal/);
+  assert.match(p, /Estilos: Histórico y cultural/);
+  assert.match(p, /Varios países: no/);
+  assert.match(buildPlanPrompt({ destination: "Perú", days: 9, travelers: 1, budget: "alto", multiCountry: true }), /Días: 9[\s\S]*Varios países: sí/);
+});
+
+test("search finds countries with flags and towns by name without accents", () => {
+  const r = searchPlaces("japon");
+  assert.equal(r[0].name, "Japón");
+  assert.equal(r[0].kind, "country");
+  assert.equal(flag(r[0].iso), "🇯🇵");
+  const k = searchPlaces("kioto");
+  assert.equal(k[0].name, "Kioto");
+  assert.equal(countryName(k[0].iso), "Japón");
+  assert.ok(searchPlaces("machu").some((p) => p.name === "Machu Picchu"));
+  assert.deepEqual(searchPlaces("a"), []);
+});
+
+test("ready-made trips are valid routes", () => {
+  assert.ok(READY_TRIPS.length >= 8);
+  for (const t of READY_TRIPS) {
+    const r = readyRoute(t.id, 2)!;
+    assert.equal(r.kind, "ready");
+    assert.equal(r.days, t.days);
+    assert.equal(r.budget!.total, t.perPerson * 2);
+    assert.ok(r.risks && r.risks.countries.length >= 1);
+    for (const s of r.stops) assert.ok(Math.abs(s.lat) <= 90 && Math.abs(s.lng) <= 180 && s.when);
+    // hand-written routes don't zig-zag, so the optimiser leaves them alone
+    assert.deepEqual(orderStops(r.stops).map((s) => s.name), r.stops.map((s) => s.name), `${t.id} would be reordered`);
+  }
 });

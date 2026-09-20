@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { planTrip, refineWithMapbox, ExtractError } from "@/lib/extract";
 import { allow } from "@/lib/rateLimit";
-import type { AnalyzeErrorCode, BudgetLevel, PlanRequest, PlanResponse } from "@/lib/types";
+import type { AnalyzeErrorCode, BudgetLevel, PlanRequest, PlanResponse, TravelerLevel } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -11,6 +11,7 @@ function fail(status: number, code: AnalyzeErrorCode, message: string) {
 }
 
 const LEVELS: BudgetLevel[] = ["mochilero", "medio", "alto"];
+const TRAVELER: TravelerLevel[] = ["primera", "intermedio", "experto"];
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
 export async function POST(req: Request) {
@@ -20,7 +21,11 @@ export async function POST(req: Request) {
   const plan: PlanRequest = {
     destination: str(b.destination, 120) || undefined,
     theme: str(b.theme, 80) || undefined,
-    days: Math.max(1, Math.min(30, Math.round(Number(b.days) || 7))),
+    days: Number(b.days) > 0 ? Math.max(1, Math.min(30, Math.round(Number(b.days)))) : undefined,
+    styles: Array.isArray(b.styles) ? b.styles.map((x) => str(x, 40)).filter(Boolean).slice(0, 6) : undefined,
+    level: TRAVELER.includes(b.level as TravelerLevel) ? (b.level as TravelerLevel) : undefined,
+    multiCountry: b.multiCountry === true,
+    context: str(b.context, 400) || undefined,
     travelers: Math.max(1, Math.min(10, Math.round(Number(b.travelers) || 2))),
     budget: LEVELS.includes(b.budget as BudgetLevel) ? (b.budget as BudgetLevel) : "medio",
     budgetAmount: Number(b.budgetAmount) > 0 ? Math.min(100000, Math.round(Number(b.budgetAmount))) : undefined,
