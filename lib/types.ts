@@ -18,6 +18,23 @@ export interface Stop {
   lng: number;
   days?: number;
   wiki?: string; // Wikipedia (es) article title, for the photo and blurb
+  activities?: Activity[];
+  added?: boolean; // put in by the person after the trip was made
+}
+
+/** Something to do at a stop: a hike, a museum, a safari, an event, a day trip… */
+export type ActivityKind =
+  | "evento" | "senderismo" | "montaña" | "safari" | "museo" | "cultura" | "naturaleza" | "agua" | "aventura" | "gastronomía" | "excursión";
+export type ActivityLength = "horas" | "medio día" | "día completo" | "noche fuera";
+
+export interface Activity {
+  name: string;
+  kind: ActivityKind;
+  length: ActivityLength;
+  note: string;
+  season?: string; // when it happens or is best (events, migrations, festivals)
+  price?: string; // rough price per person, e.g. "≈ 40 €"
+  wiki?: string;
 }
 
 export interface Budget {
@@ -50,6 +67,7 @@ export interface Route {
   summary?: string;
   budget?: Budget;
   tips?: string[];
+  edited?: boolean; // stops added or removed after the budget was worked out
 }
 
 export interface AnalyzeSources {
@@ -108,10 +126,19 @@ export interface PlanRequest {
   level?: TravelerLevel;
   multiCountry?: boolean; // allow neighbouring countries
   context?: string; // e.g. what a video showed
+  mustSee?: string[]; // places the person wants in the route no matter what ("Paraty, Brasil")
+  countries?: string[]; // neighbouring countries the person picked (in Spanish)
   budget: BudgetLevel;
   budgetAmount?: number;
   origin?: string;
   travelers: number;
 }
+
+export interface ActivitiesRequest {
+  stops: { name: string; country?: string; days?: number }[];
+  styles?: string[];
+  level?: TravelerLevel;
+}
+export type ActivitiesResponse = { ok: true; activities: Activity[][] } | { ok: false; code: AnalyzeErrorCode; message: string };
 
 export type PlanResponse = { ok: true; route: Route } | { ok: false; code: AnalyzeErrorCode; message: string };

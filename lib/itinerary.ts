@@ -1,5 +1,5 @@
 import type { Candidate, Route, Stop } from "./types";
-import { orderStops } from "./geo";
+import { bestInsertIndex, orderStops } from "./geo";
 
 /** "Día 3" or "Días 3–5" for each stop, from each stop's length in days. */
 export function withDayRanges<T extends { days?: number }>(stops: T[]): (T & { when: string })[] {
@@ -28,4 +28,27 @@ export function routeFromCandidates(name: string, picked: Candidate[], source: s
     sources,
     risks,
   };
+}
+
+/** Days a stop lasts, from its own count or its label ("Días 3–5" = 3). */
+export function stopDays(s: { days?: number; when?: string }): number {
+  if (s.days) return Math.max(1, Math.round(s.days));
+  const m = s.when?.match(/(\d+)\s*[–-]\s*(\d+)/);
+  return m ? Math.max(1, Number(m[2]) - Number(m[1]) + 1) : 1;
+}
+
+function retime(route: Route, stops: Stop[]): Route {
+  const ranged = withDayRanges(stops.map((s) => ({ ...s, days: stopDays(s) })));
+  return { ...route, stops: ranged, days: ranged.reduce((a, s) => a + (s.days || 1), 0), edited: true };
+}
+
+/** Adds a stop where it makes the fewest extra km, and shifts the days after it. */
+export function addStop(route: Route, stop: Omit<Stop, "when">): { route: Route; at: number } {
+  const at = bestInsertIndex(route.stops, stop);
+  const stops = [...route.stops.slice(0, at), { ...stop, when: "", added: true }, ...route.stops.slice(at)];
+  return { route: retime(route, stops), at };
+}
+
+export function removeStop(route: Route, index: number): Route {
+  return retime(route, route.stops.filter((_, i) => i !== index));
 }

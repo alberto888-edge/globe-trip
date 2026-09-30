@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import type { BudgetLevel, PlanRequest, TravelerLevel } from "@/lib/types";
-import { countryName, flag, loadMorePlaces, searchPlaces, type PlaceLabel } from "@/lib/labels";
+import { countryByIso, countryByName, countryName, flag, kmToCountry, loadMorePlaces, nearbyCountries, resolvePlace, searchPlaces, type PlaceLabel } from "@/lib/labels";
+import { distanceKm, fitFor } from "@/lib/geo";
 import { READY_TRIPS } from "@/lib/trips";
 import PlacePhoto from "./PlacePhoto";
+import PlaceSearch, { FitNotice, fitMessage, placeText, Suggestion, type FitMsg } from "./PlaceSearch";
 import Sheet from "./Sheet";
 
 const DESTINATIONS: { name: string; wiki: string; tag: string; iso: string }[] = [
@@ -55,20 +57,11 @@ function Stepper({ id, label, value, min, max, onChange, unit }: { id: string; l
   );
 }
 
-/** Country: a big flag. City or spot: a photo with the country's flag in the corner. */
-function Suggestion({ p, onPick }: { p: PlaceLabel; onPick: () => void }) {
-  const country = countryName(p.iso);
-  return (
-    <button type="button" className="suggest-row" role="option" aria-selected="false" onClick={onPick}>
-      {p.kind === "country"
-        ? <span className="suggest-flag" aria-hidden="true">{flag(p.iso) || "🌍"}</span>
-        : <span className="suggest-photo"><PlacePhoto q={{ name: p.name, country }} /><i aria-hidden="true">{flag(p.iso)}</i></span>}
-      <span className="suggest-text"><b>{p.name}</b><span>{p.kind === "country" ? "País" : country || "Ciudad"}</span></span>
-    </button>
-  );
-}
+/** A place the person wants in the trip no matter what. No coordinates if it was typed freely. */
+interface Must { name: string; text: string; iso?: string; lat?: number; lng?: number }
+const mustFrom = (p: PlaceLabel): Must => ({ name: p.name, text: placeText(p), iso: p.iso, lat: p.lat, lng: p.lng });
 
-export interface PlannerInit { destination?: string; context?: string; multiCountry?: boolean }
+export interface PlannerInit { destination?: string; context?: string; multiCountry?: boolean; countries?: string[]; mustSee?: string[] }
 
 export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   init?: PlannerInit;
@@ -89,6 +82,12 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   const [budget, setBudget] = useState<BudgetLevel>("medio");
   const [amount, setAmount] = useState("");
   const [origin, setOrigin] = useState("Madrid");
+  const [destPlace, setDestPlace] = useState<PlaceLabel | undefined>(() => (init?.destination ? resolvePlace(init.destination) : undefined));
+  const [must, setMust] = useState<Must[]>(() => (init?.mustSee || []).map((t) => { const p = resolvePlace(t); return p ? mustFrom(p) : { name: t, text: t }; }));
+  const [countries, setCountries] = useState<string[]>(() => (init?.countries || []).map((c) => countryByName(c)?.iso).filter(Boolean) as string[]);
+  const [adding, setAdding] = useState(false);
+  const [notice, setNotice] = useState<FitMsg | null>(null);
+  const [openCountries, setOpenCountries] = useState(false);
 
   // Suggestions as you type (after a short pause, so photos aren't fetched for every letter).
   const [typed, setTyped] = useState("");
@@ -98,8 +97,43 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const suggestions = useMemo(() => searchPlaces(typed, 6), [typed, moreLoaded]);
 
-  const nameFor = (p: PlaceLabel) => (p.kind === "country" || !countryName(p.iso) ? p.name : `${p.name}, ${countryName(p.iso)}`);
-  const pick = (name: string) => { setDestination(name); setQuery(""); setTheme(null); setStep(2); };
+  const pick = (name: string, place?: PlaceLabel) => {
+    setDestination(name); setDestPlace(place ?? resolvePlace(name)); setQuery(""); setTheme(null); setStep(2);
+    setMust([]); setCountries([]); setNotice(null); setAdding(false);
+  };
+  const destIso = destPlace?.iso;
+
+  // Neighbours of the destination (measured town to town), plus any country a must-see place pulled in.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nearby = useMemo(() => (destIso ? nearbyCountries(destIso, 10) : []), [destIso, moreLoaded]);
+  const countryOptions = useMemo(() => {
+    const list = nearby.map((c) => ({ iso: c.iso, km: c.km as number | undefined, border: c.border }));
+    for (const iso of countries) if (!list.some((c) => c.iso === iso)) list.push({ iso, km: undefined, border: false });
+    return list;
+  }, [nearby, countries]);
+  const toggleCountry = (iso: string) => setCountries((l) => (l.includes(iso) ? l.filter((x) => x !== iso) : [...l, iso]));
+
+  /** Adds a must-see place, unless it's another trip altogether (then it asks first). */
+  const addMust = (p: PlaceLabel, force = false) => {
+    setAdding(false);
+    if (must.some((m) => m.text === placeText(p))) { setNotice({ tone: "info", text: `${p.name} ya está en tu ruta.` }); return; }
+    let km = 0, from = destination.split(",")[0].trim() || "tu destino";
+    if (destPlace && p.iso !== destPlace.iso) km = kmToCountry(destPlace.iso, p);
+    else if (!destPlace && must.some((m) => m.lat !== undefined)) km = Infinity;
+    for (const m of must) {
+      if (m.lat === undefined || m.lng === undefined) continue;
+      const d = distanceKm({ lat: m.lat, lng: m.lng }, p);
+      if (d < km) { km = d; from = m.name; }
+    }
+    if (!Number.isFinite(km)) km = 0;
+    const fit = fitFor(km);
+    if (fit === "tooFar" && !force) { setNotice({ ...fitMessage(fit, p.name, km, from)!, place: p }); return; }
+    setMust((l) => [...l, mustFrom(p)]);
+    const other = destIso && p.iso !== destIso && countryByIso(p.iso) ? p.iso : null;
+    if (other) { setMulti(true); setCountries((l) => (l.includes(other) ? l : [...l, other])); }
+    const far = fitMessage(fit, p.name, km, from);
+    setNotice(far && fit === "far" ? far : other ? { tone: "info", text: `${flag(other)} ${countryName(other)} se suma a los países del viaje.` } : null);
+  };
   const toggleStyle = (s: string) => setStyles((l) => (l.includes(s) ? l.filter((x) => x !== s) : [...l, s]));
 
   const label = [destination.trim(), theme].filter(Boolean).join(" · ") || "Tu viaje";
@@ -116,11 +150,11 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
             <input id="dest" className="field" type="search" maxLength={120} autoComplete="off" enterKeyHint="next"
               placeholder="Busca un país, ciudad o lugar…" value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && query.trim().length > 1) pick(suggestions[0] ? nameFor(suggestions[0]) : query.trim()); }} />
+              onKeyDown={(e) => { if (e.key === "Enter" && query.trim().length > 1) { if (suggestions[0]) pick(placeText(suggestions[0]), suggestions[0]); else pick(query.trim()); } }} />
             {query.trim().length > 1 && (
               <div className="suggest-list" role="listbox" aria-label="Sugerencias">
                 {suggestions.map((p) => (
-                  <Suggestion key={p.id} p={p} onPick={() => pick(nameFor(p))} />
+                  <Suggestion key={p.id} p={p} onPick={() => pick(placeText(p), p)} />
                 ))}
                 <button type="button" className="suggest-row suggest-free" onClick={() => pick(query.trim())}>
                   <span className="suggest-flag" aria-hidden="true">✨</span>
@@ -150,7 +184,7 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
               <span className="eyebrow">DESTINOS POPULARES</span>
               <div className="dest-grid">
                 {DESTINATIONS.map((d) => (
-                  <button key={d.name} type="button" className="dest" onClick={() => pick(d.name)}>
+                  <button key={d.name} type="button" className="dest" onClick={() => pick(d.name, countryByIso(d.iso))}>
                     <PlacePhoto className="dest-photo" q={{ name: d.wiki, wiki: d.wiki }} alt={d.name} />
                     <span className="dest-text"><b>{flag(d.iso)} {d.name}</b><span>{d.tag}</span></span>
                   </button>
@@ -179,6 +213,25 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
           </div>
           {init?.context && <p className="note">{init.context}</p>}
 
+          <span className="eyebrow">DESTINOS QUE QUIERES SÍ O SÍ · OPCIONAL</span>
+          <div className="must">
+            {must.map((m) => (
+              <span key={m.text} className="must-chip">
+                <i aria-hidden="true">{flag(m.iso) || "📍"}</i>{m.name}
+                <button type="button" aria-label={`Quitar ${m.name}`} onClick={() => setMust((l) => l.filter((x) => x !== m))}>×</button>
+              </span>
+            ))}
+            {!adding && must.length < 6 && (
+              <button type="button" className="must-add" onClick={() => { setAdding(true); setNotice(null); }}>+ Añadir destino a la ruta</button>
+            )}
+          </div>
+          {adding && (
+            <PlaceSearch id="must" autoFocus placeholder="Ciudad, parque, isla… que no te quieras perder"
+              onPick={(p) => addMust(p)}
+              onFree={(t) => { setAdding(false); setNotice(null); setMust((l) => (l.some((m) => m.text === t) ? l : [...l, { name: t, text: t }])); }} />
+          )}
+          {notice && <FitNotice msg={notice} onClose={() => setNotice(null)} onAdd={notice.place ? () => { const p = notice.place!; setNotice(null); addMust(p, true); } : undefined} />}
+
           <span className="eyebrow">¿QUÉ TIPO DE VIAJE? · PUEDES ELEGIR VARIOS</span>
           <div className="theme-row">
             {STYLES.map((s) => <button key={s} type="button" className="theme" aria-pressed={styles.includes(s)} onClick={() => toggleStyle(s)}>{s}</button>)}
@@ -204,9 +257,32 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
 
           <label className="switch">
             <span><b>Varios países</b><small>Añade países vecinos si el viaje gana con ello</small></span>
-            <input type="checkbox" checked={multi} onChange={(e) => setMulti(e.target.checked)} />
+            <input type="checkbox" checked={multi} onChange={(e) => { setMulti(e.target.checked); setOpenCountries(e.target.checked && !countries.length); }} />
             <i aria-hidden="true" />
           </label>
+          {multi && countryOptions.length > 0 && (
+            <div className="cpick">
+              <button type="button" className="cpick-head" aria-expanded={openCountries} onClick={() => setOpenCountries((o) => !o)}>
+                <span className="cpick-flags" aria-hidden="true">{countries.length ? countries.slice(0, 4).map(flag).join("") : "🌍"}</span>
+                <span className="cpick-text">
+                  <b>{countries.length ? countries.map(countryName).join(", ") : `Países cerca de ${countryName(destIso) || destination}`}</b>
+                  <small>{countries.length ? `${countries.length} ${countries.length === 1 ? "país elegido" : "países elegidos"} · toca para cambiar` : "Elige los que quieras, o lo decidimos nosotros"}</small>
+                </span>
+                <i className="cpick-chev" aria-hidden="true" />
+              </button>
+              {openCountries && (
+                <div className="cpick-list" role="listbox" aria-multiselectable="true" aria-label="Países cercanos">
+                  {countryOptions.map((c) => (
+                    <button key={c.iso} type="button" role="option" aria-selected={countries.includes(c.iso)} className="cpick-opt" onClick={() => toggleCountry(c.iso)}>
+                      <span className="cpick-flag" aria-hidden="true">{flag(c.iso)}</span>
+                      <span className="cpick-name"><b>{countryName(c.iso)}</b><small>{c.km === undefined ? "Por tu destino añadido" : c.border ? "Frontera" : `A ~${(Math.max(100, Math.round(c.km / 100) * 100)).toLocaleString("es-ES")} km`}</small></span>
+                      <i className="cpick-check" aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <Stepper id="st-trav" label="Viajeros" value={travelers} min={1} max={10} unit={travelers === 1 ? "persona" : "personas"} onChange={setTravelers} />
           <span className="eyebrow">PRESUPUESTO</span>
@@ -232,6 +308,8 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
             <button className="btn btn-solid" type="button" onClick={() => onSubmit({
               destination: destination.trim() || undefined, theme: theme || undefined,
               days: autoDays ? undefined : days, styles: styles.length ? styles : undefined, level, multiCountry: multi,
+              countries: multi && countries.length ? countries.map(countryName).filter(Boolean) : undefined,
+              mustSee: must.length ? must.map((m) => m.text) : undefined,
               context: init?.context, travelers, budget,
               budgetAmount: Number(amount) > 0 ? Number(amount) : undefined, origin: origin.trim() || undefined,
             }, label)}>Crear mi viaje</button>

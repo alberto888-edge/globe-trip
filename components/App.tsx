@@ -1,11 +1,11 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnalyzeOk, AnalyzeResponse, Candidate, Pin, PinType, PlanRequest, PlanResponse, Route } from "@/lib/types";
+import type { Activity, AnalyzeOk, AnalyzeResponse, Candidate, Pin, PinType, PlanRequest, PlanResponse, Route } from "@/lib/types";
 import { DEMO_ROUTES, EXAMPLES, SEED_PINS } from "@/lib/demo";
 import { frame, routeKm } from "@/lib/geo";
 import { detectPlatform, toUrl } from "@/lib/links";
-import { routeFromCandidates } from "@/lib/itinerary";
+import { addStop, removeStop, routeFromCandidates } from "@/lib/itinerary";
 import { usePersistentState } from "@/lib/storage";
 import { usePlaceInfo } from "@/lib/wiki";
 import { countryByName, countryName, flag, type PlaceLabel } from "@/lib/labels";
@@ -17,6 +17,7 @@ import PlacePhoto from "./PlacePhoto";
 import PickSheet from "./PickSheet";
 import PlannerSheet, { type PlannerInit } from "./PlannerSheet";
 import ItinerarySheet from "./ItinerarySheet";
+import { ActivityList, fetchActivities, useActivityFilter } from "./Activities";
 
 const GlobeCanvas = dynamic(() => import("./GlobeCanvas"), { ssr: false });
 
@@ -55,12 +56,14 @@ export default function App() {
   const [globeReady, setGlobeReady] = useState(false);
   const [bottomInset, setBottomInset] = useState(180);
   const [input, setInput] = useState("");
+  const [acts, setActs] = useState<{ id: string; loading: boolean; error?: string } | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didRestore = useRef(false);
+  const actsTried = useRef(new Set<string>());
 
   // ---------- helpers ----------
   const say = useCallback((msg: string, ms = 3000) => {
@@ -217,6 +220,8 @@ export default function App() {
     return {
       destination: r.request?.destination || countries.join(", ") || r.stops.map((s) => s.name).slice(0, 4).join(", "),
       multiCountry: r.request?.multiCountry ?? countries.length > 1,
+      countries: r.request?.countries,
+      mustSee: [...(r.request?.mustSee || []), ...r.stops.filter((s) => s.added).map((s) => (s.country ? `${s.name}, ${s.country}` : s.name))],
       context: r.kind === "video" ? `Inspirado en el vídeo «${r.name}»: ${r.stops.map((s) => s.name).join(", ")}`.slice(0, 380) : undefined,
     };
   };
@@ -257,6 +262,55 @@ export default function App() {
     } catch { /* cancelled */ }
   };
 
+  // ---------- editing a route (also updates the saved copy, if any) ----------
+  const updateRoute = (next: Route) => {
+    clearTimers();
+    setRoute(next);
+    setRevealed(next.stops.length);
+    setTrips((l) => (l.some((t) => t.id === next.id) ? l.map((t) => (t.id === next.id ? next : t)) : l));
+  };
+
+  const addStopTo = (r: Route, p: PlaceLabel) => {
+    const country = countryName(p.iso) || undefined;
+    const { route: next, at } = addStop(r, {
+      name: p.name, country, lat: p.lat, lng: p.lng,
+      sub: p.kind === "country" ? "País" : "Añadido por ti", note: "",
+      days: p.kind === "country" ? 3 : p.tier <= 2 ? 2 : 1,
+    });
+    updateRoute(next);
+    if (trips.some((t) => t.id === r.id) && !pins.some((x) => x.name.toLowerCase() === p.name.toLowerCase())) {
+      setPins((l) => [...l, { id: uid(), name: p.name, lat: p.lat, lng: p.lng, type: "wishlist" }]);
+    }
+    say(`${p.name} añadido · ${next.stops[at].when}`);
+  };
+
+  /** Fills in activities for the stops that have none (one call for the whole route). */
+  const loadActivities = useCallback(async (r: Route) => {
+    const idx = r.stops.map((s, i) => (s.activities?.length ? -1 : i)).filter((i) => i >= 0).slice(0, 10);
+    if (!idx.length) return;
+    actsTried.current.add(r.id);
+    setActs({ id: r.id, loading: true });
+    try {
+      const lists = await fetchActivities({
+        stops: idx.map((i) => ({ name: r.stops[i].name, country: r.stops[i].country, days: r.stops[i].days })),
+        styles: r.request?.styles, level: r.request?.level,
+      });
+      const byName = new Map(idx.map((i, k) => [r.stops[i].name, lists[k]] as const));
+      const merge = (x: Route): Route => ({ ...x, stops: x.stops.map((s) => (!s.activities?.length && byName.get(s.name)?.length ? { ...s, activities: byName.get(s.name) } : s)) });
+      setRoute((cur) => (cur && cur.id === r.id ? merge(cur) : cur));
+      setTrips((l) => l.map((t) => (t.id === r.id ? merge(t) : t)));
+      setActs({ id: r.id, loading: false });
+    } catch (e: any) {
+      setActs({ id: r.id, loading: false, error: e?.message || "No he podido traer las actividades." });
+    }
+  }, [setRoute, setTrips]);
+
+  // A trip planned by the AI brings its activities straight away, while you read the itinerary.
+  useEffect(() => {
+    if (sheet?.kind !== "itinerary" || !route || route.kind !== "plan" || actsTried.current.has(route.id)) return;
+    if (route.stops.some((s) => !s.activities?.length)) loadActivities(route);
+  }, [sheet, route, loadActivities]);
+
   const visited = pins.filter((p) => p.type === "visitado").length;
   const wish = pins.length - visited;
   const saved = route ? trips.some((t) => t.id === route.id) : false;
@@ -282,6 +336,8 @@ export default function App() {
         <GlobeCanvas
           pins={pins}
           route={route}
+          trips={trips}
+          onTripTap={(id) => { const t = trips.find((x) => x.id === id); if (t) { setSheet(null); showRoute(t); } }}
           revealed={revealed}
           focus={focus}
           bottomInset={bottomInset}
@@ -409,6 +465,9 @@ export default function App() {
 
       {sheet?.kind === "itinerary" && route && (
         <ItinerarySheet route={route} saved={saved} onClose={() => setSheet(null)} onSave={saveTrip} onShare={shareRoute}
+          activities={{ loading: acts?.id === route.id && acts.loading, error: acts?.id === route.id ? acts.error : undefined, load: () => loadActivities(route) }}
+          onAddStop={(p) => addStopTo(route, p)}
+          onRemoveStop={(i) => { const s = route.stops[i]; updateRoute(removeStop(route, i)); say(`${s.name} quitado de la ruta`); }}
           onShow={(s) => { setSheet(null); flyTo(s.lat, s.lng, 1.2); }}
           onAdapt={route.kind === "demo" ? undefined : () => setSheet({ kind: "planner", init: adaptInit(route) })} />
       )}
@@ -433,6 +492,15 @@ export default function App() {
 function PlaceSheet({ place, onClose, onPlan, onPin }: { place: PlacePick; onClose: () => void; onPlan: () => void; onPin: (t: PinType) => void }) {
   const { info } = usePlaceInfo({ name: place.name, country: place.country });
   const f = flag(place.iso);
+  const [acts, setActs] = useState<{ list?: Activity[]; loading?: boolean; error?: string }>({});
+  const filter = useActivityFilter(acts.list || []);
+  const loadActs = async () => {
+    setActs({ loading: true });
+    try {
+      const [list] = await fetchActivities({ stops: [{ name: place.name, country: place.country, days: place.kind === "country" ? 7 : 3 }] });
+      setActs({ list });
+    } catch (e: any) { setActs({ error: e?.message || "No he podido traer las actividades." }); }
+  };
   return (
     <Sheet label={place.name} onClose={onClose}>
       <PlacePhoto className="hero-photo" large q={{ name: place.name, country: place.country }} />
@@ -443,6 +511,18 @@ function PlaceSheet({ place, onClose, onPlan, onPin }: { place: PlacePick; onClo
       <button className="btn btn-solid btn-wide" type="button" onClick={onPlan}>
         Organizar un viaje {place.kind === "country" ? "por" : "a"} {place.name}
       </button>
+      {acts.list?.length ? (
+        <section className="acts-place" aria-label={`Qué hacer en ${place.name}`}>
+          <span className="eyebrow">QUÉ HACER {place.kind === "country" ? "EN" : "EN Y CERCA DE"} {place.name.toUpperCase()}</span>
+          {filter.chips}
+          <ActivityList list={acts.list} test={filter.test} />
+        </section>
+      ) : (
+        <button className="btn btn-ghost btn-wide acts-btn" type="button" disabled={acts.loading} onClick={loadActs}>
+          {acts.loading ? <><i className="spin" aria-hidden="true" />Buscando planes…</> : `✨ Qué hacer en ${place.name}: rutas, museos, excursiones…`}
+        </button>
+      )}
+      {acts.error && <p className="budget-note">{acts.error}</p>}
       <div className="row2">
         <button type="button" className="toggle t-wishlist" onClick={() => onPin("wishlist")}>Quiero ir</button>
         <button type="button" className="toggle t-visitado" onClick={() => onPin("visitado")}>He estado</button>

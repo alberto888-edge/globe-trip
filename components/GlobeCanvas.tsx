@@ -34,6 +34,7 @@ export interface Focus { lat: number; lng: number; spread?: number; home?: boole
 interface Props {
   pins: Pin[];
   route: Route | null;
+  trips?: Route[]; // saved trips, drawn as glowing traces when they aren't the open route
   revealed: number; // how many route stops are visible (staged reveal)
   focus: Focus | null;
   bottomInset: number; // px covered by the bottom UI, so the globe sits above it
@@ -41,6 +42,7 @@ interface Props {
   onPinTap: (id: string) => void;
   onStopTap: (index: number) => void;
   onLabelTap: (label: PlaceLabel) => void;
+  onTripTap?: (id: string) => void;
   onReady?: () => void;
   onInteract?: () => void;
 }
@@ -48,7 +50,12 @@ interface Props {
 type Marker =
   | { kind: "pin"; id: string; lat: number; lng: number; type: Pin["type"]; name: string }
   | { kind: "stop"; id: string; lat: number; lng: number; index: number; name: string }
+  | { kind: "dot"; id: string; lat: number; lng: number; name: string; tripId: string; tripName: string; color: string; first: boolean }
   | PlaceLabel;
+
+// Neon colours for saved trips, one per trip, so overlapping trips stay apart.
+const TRIP_COLORS = ["#3ff0ff", "#ff5fd7", "#b8ff3c", "#ffcf3f", "#9d8bff", "#ff8a4c"];
+const rgbOf = (hex: string) => { const c = new THREE.Color(hex); return `${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)}`; };
 
 const HOME = { lat: 28, lng: 8 };
 const R = 100; // globe.gl radius in scene units
@@ -83,7 +90,7 @@ function cssColor(name: string, fallback: string) {
 }
 
 export default function GlobeCanvas(props: Props) {
-  const { pins, route, revealed, focus, bottomInset } = props;
+  const { pins, route, revealed, focus, bottomInset, trips = [] } = props;
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const { w, h } = useViewport();
   const [ready, setReady] = useState(false);
@@ -149,7 +156,7 @@ export default function GlobeCanvas(props: Props) {
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-      lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false }));
+      lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82, depthWrite: false }));
       lines.renderOrder = 1;
       g.scene().add(lines);
     }).catch(() => { /* borders are decoration */ });
@@ -273,11 +280,21 @@ export default function GlobeCanvas(props: Props) {
   // ---------- markers ----------
   // Pins/stops and place labels are memoised separately so moving the camera
   // (which changes labels) never re-creates the pins' DOM elements.
+  // Saved trips other than the open one: each gets a neon colour and is drawn as a glowing line.
+  const shownTrips = useMemo(() => trips
+    .map((t, i) => ({ t, color: TRIP_COLORS[i % TRIP_COLORS.length] }))
+    .filter(({ t }) => t.id !== route?.id && t.stops.length > 0), [trips, route?.id]);
   const pinMarkers: Marker[] = useMemo(() => {
-    const m: Marker[] = pins.map((p) => ({ kind: "pin", id: p.id, lat: p.lat, lng: p.lng, type: p.type, name: p.name }));
+    // A place that belongs to a saved trip shows as a small glowing dot on its trace, not a big pin.
+    const inTrips = new Set(trips.flatMap((t) => t.stops.map((s) => s.name.toLowerCase())));
+    const m: Marker[] = pins.filter((p) => !inTrips.has(p.name.toLowerCase()))
+      .map((p) => ({ kind: "pin", id: p.id, lat: p.lat, lng: p.lng, type: p.type, name: p.name }));
+    for (const { t, color } of shownTrips) {
+      t.stops.forEach((s, i) => m.push({ kind: "dot", id: `${t.id}-d${i}`, lat: s.lat, lng: s.lng, name: s.name, tripId: t.id, tripName: t.name, color, first: i === 0 }));
+    }
     if (route) route.stops.slice(0, revealed).forEach((s, i) => m.push({ kind: "stop", id: `${route.id}-${i}`, lat: s.lat, lng: s.lng, index: i, name: s.name }));
     return m;
-  }, [pins, route, revealed]);
+  }, [pins, trips, shownTrips, route, revealed]);
   // Drop place names that would sit on top of a pin or route stop (e.g. "Luxor" next to stop "Luxor"),
   // then keep only names whose on-screen boxes don't overlap, most important first.
   const labels = useMemo(() => {
@@ -333,9 +350,13 @@ export default function GlobeCanvas(props: Props) {
     // globe.gl centres this element on the point; children are offset from that centre.
     const el = document.createElement("button");
     el.type = "button";
-    el.className = `mk ${mk.kind === "stop" ? "mk-stop" : "mk-pinwrap"}`;
-    el.setAttribute("aria-label", mk.kind === "stop" ? `Parada ${mk.index + 1}: ${mk.name}` : mk.name);
-    if (mk.kind === "pin") {
+    el.className = `mk ${mk.kind === "stop" ? "mk-stop" : mk.kind === "dot" ? "mk-dot" : "mk-pinwrap"}`;
+    el.setAttribute("aria-label", mk.kind === "stop" ? `Parada ${mk.index + 1}: ${mk.name}` : mk.kind === "dot" ? `${mk.name} · ruta ${mk.tripName}` : mk.name);
+    if (mk.kind === "dot") {
+      el.style.setProperty("--c", mk.color);
+      // the trip's name, once, next to where it starts
+      if (mk.first) { const t = document.createElement("span"); t.className = "mk-trip"; t.textContent = mk.tripName; el.append(t); }
+    } else if (mk.kind === "pin") {
       el.style.setProperty("--c", mk.type === "visitado" ? "var(--visited)" : "var(--wishlist)");
       el.innerHTML = `<svg class="mk-pin" viewBox="0 0 22 30" aria-hidden="true"><path d="M11 1C5.5 1 1 5.4 1 10.8 1 18 11 29 11 29s10-11 10-18.2C21 5.4 16.5 1 11 1Z"/><circle cx="11" cy="10.8" r="3.6"/></svg>`;
     } else {
@@ -350,15 +371,27 @@ export default function GlobeCanvas(props: Props) {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
       if (mk.kind === "pin") handlers.current.onPinTap(mk.id);
+      else if (mk.kind === "dot") handlers.current.onTripTap?.(mk.tripId);
       else handlers.current.onStopTap(mk.index);
     });
     return el;
   }, []);
 
   // ---------- route arcs: a soft base line plus a light that travels along it ----------
+  // Saved trips: a wide faint halo, a thin bright core and a slow light running along it.
   const arcs = useMemo(() => {
-    if (!route) return [];
     const out: object[] = [];
+    for (const { t, color } of shownTrips) {
+      const rgb = rgbOf(color);
+      for (let i = 0; i < t.stops.length - 1; i++) {
+        const a = t.stops[i], b = t.stops[i + 1];
+        const seg = { startLat: a.lat, startLng: a.lng, endLat: b.lat, endLng: b.lng, rgb };
+        out.push({ ...seg, layer: "glow", key: `${t.id}-g${i}` });
+        out.push({ ...seg, layer: "core", key: `${t.id}-c${i}` });
+        out.push({ ...seg, layer: "spark", key: `${t.id}-s${i}`, phase: (i * 0.61) % 2 });
+      }
+    }
+    if (!route) return out;
     for (let i = 0; i < Math.min(revealed, route.stops.length) - 1; i++) {
       const a = route.stops[i], b = route.stops[i + 1];
       const seg = { startLat: a.lat, startLng: a.lng, endLat: b.lat, endLng: b.lng };
@@ -366,7 +399,7 @@ export default function GlobeCanvas(props: Props) {
       out.push({ ...seg, layer: "flow", key: `${route.id}-f${i}` });
     }
     return out;
-  }, [route, revealed]);
+  }, [route, revealed, shownTrips]);
 
   const rings = useMemo(() => (route ? route.stops.slice(0, revealed).map((s) => ({ lat: s.lat, lng: s.lng })) : []), [route, revealed]);
   const routeRgb = useMemo(() => new THREE.Color(colors.route), [colors.route]);
@@ -418,7 +451,7 @@ export default function GlobeCanvas(props: Props) {
         if (el.dataset.label) return; // place names never take taps
         el.style.pointerEvents = visible ? "auto" : "none";
         // Put a stop's name on whichever side has room on screen.
-        const label = visible ? (el.querySelector(".mk-label") as HTMLElement | null) : null;
+        const label = visible ? (el.querySelector(".mk-label, .mk-trip") as HTMLElement | null) : null;
         if (label) {
           const r = el.getBoundingClientRect();
           const x = r.left + r.width / 2;
@@ -429,15 +462,18 @@ export default function GlobeCanvas(props: Props) {
       arcsData={arcs}
       arcStartLat="startLat" arcStartLng="startLng" arcEndLat="endLat" arcEndLng="endLng"
       arcColor={(d: any) => {
+        if (d.layer === "glow") return `rgba(${d.rgb},0.2)`;
+        if (d.layer === "core") return `rgba(${d.rgb},0.95)`;
+        if (d.layer === "spark") return [`rgba(${d.rgb},0)`, "rgba(255,255,255,0.95)", `rgba(${d.rgb},0)`];
         const rgb = `${Math.round(routeRgb.r * 255)},${Math.round(routeRgb.g * 255)},${Math.round(routeRgb.b * 255)}`;
         return d.layer === "base" ? `rgba(${rgb},0.6)` : [`rgba(${rgb},0)`, `rgba(255,236,196,0.95)`];
       }}
-      arcStroke={(d: any) => (d.layer === "base" ? 0.45 : 0.5) * thin}
-      arcAltitudeAutoScale={0.32}
-      arcDashLength={(d: any) => (d.layer === "base" ? 1 : 0.18)}
-      arcDashGap={(d: any) => (d.layer === "base" ? 0 : 0.82)}
-      arcDashInitialGap={(d: any) => (d.layer === "base" ? 0 : 1)}
-      arcDashAnimateTime={(d: any) => (d.layer === "base" ? 0 : reduceMotion.current ? 0 : 2600)}
+      arcStroke={(d: any) => ({ glow: 1.5, core: 0.34, spark: 0.5, base: 0.45, flow: 0.5 } as Record<string, number>)[d.layer] * thin}
+      arcAltitudeAutoScale={(d: any) => (d.layer === "base" || d.layer === "flow" ? 0.32 : 0.14)}
+      arcDashLength={(d: any) => (d.layer === "flow" ? 0.18 : d.layer === "spark" ? 0.25 : 1)}
+      arcDashGap={(d: any) => (d.layer === "flow" ? 0.82 : d.layer === "spark" ? 1.75 : 0)}
+      arcDashInitialGap={(d: any) => (d.layer === "flow" ? 1 : d.layer === "spark" ? d.phase : 0)}
+      arcDashAnimateTime={(d: any) => (reduceMotion.current ? 0 : d.layer === "flow" ? 2600 : d.layer === "spark" ? 5200 : 0)}
       arcsTransitionDuration={900}
       ringsData={rings}
       ringColor={ringColor}

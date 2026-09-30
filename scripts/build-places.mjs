@@ -136,6 +136,7 @@ const COUNTRY_ES = {
   Suazilandia: "Esuatini", "Kirguizistán": "Kirguistán", Lesotho: "Lesoto", Malawi: "Malaui", "Islas Faroe": "Islas Feroe",
   "Congo (Rep. Dem.)": "R. D. del Congo", Mali: "Malí", Grenada: "Granada",
 };
+const cca2 = new Map(countries.map((c) => [c.cca3, c.cca2]));
 const outCountries = countries
   .filter((c) => c.area > 300 && c.latlng?.length === 2)
   .map((c) => ({
@@ -144,6 +145,8 @@ const outCountries = countries
     lat: round(c.latlng[0]),
     lng: round(c.latlng[1]),
     t: c.area > 1_000_000 ? 1 : c.area > 150_000 ? 2 : 3,
+    // land neighbours, for "Varios países"
+    ...(c.borders?.length ? { b: c.borders.map((x) => cca2.get(x)).filter(Boolean) } : {}),
   }));
 
 const byKey = new Map();

@@ -26,6 +26,8 @@ export async function POST(req: Request) {
     level: TRAVELER.includes(b.level as TravelerLevel) ? (b.level as TravelerLevel) : undefined,
     multiCountry: b.multiCountry === true,
     context: str(b.context, 400) || undefined,
+    mustSee: Array.isArray(b.mustSee) ? b.mustSee.map((x) => str(x, 80)).filter(Boolean).slice(0, 6) : undefined,
+    countries: Array.isArray(b.countries) ? b.countries.map((x) => str(x, 40)).filter(Boolean).slice(0, 8) : undefined,
     travelers: Math.max(1, Math.min(10, Math.round(Number(b.travelers) || 2))),
     budget: LEVELS.includes(b.budget as BudgetLevel) ? (b.budget as BudgetLevel) : "medio",
     budgetAmount: Number(b.budgetAmount) > 0 ? Math.min(100000, Math.round(Number(b.budgetAmount))) : undefined,

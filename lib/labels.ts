@@ -2,10 +2,10 @@
 // countries from far away, then capitals and big cities, then towns when you're
 // right on top of them), and search by name with flags.
 import data from "./places.json";
-import { distanceKm } from "./geo";
+import { distanceKm, type LatLng } from "./geo";
 
 export interface PlaceLabel { id: string; kind: "country" | "city"; name: string; lat: number; lng: number; tier: number; iso: string }
-type Raw = { n: string; lat: number; lng: number; t: number; c: string };
+type Raw = { n: string; lat: number; lng: number; t: number; c: string; b?: string[] };
 
 // Built once so the globe can keep the same DOM element for the same label.
 const COUNTRIES: PlaceLabel[] = (data.countries as Raw[])
@@ -14,8 +14,10 @@ const CITIES: PlaceLabel[] = (data.cities as Raw[])
   .map((c, i) => ({ id: `p${i}`, kind: "city", name: c.n, lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
 
 const COUNTRY_BY_ISO = new Map(COUNTRIES.map((c) => [c.iso, c]));
+const LAND_NEIGHBOURS = new Map((data.countries as Raw[]).map((c) => [c.c, c.b || []]));
 export const countryName = (iso?: string) => (iso && COUNTRY_BY_ISO.get(iso)?.name) || "";
 export const countryByName = (name: string) => COUNTRIES.find((c) => norm(c.name) === norm(name));
+export const countryByIso = (iso?: string) => (iso ? COUNTRY_BY_ISO.get(iso) : undefined);
 
 /** 🇯🇵 from "JP". */
 export const flag = (iso?: string) =>
@@ -42,6 +44,7 @@ export function loadMorePlaces(): Promise<boolean> {
       .then((list: Raw[]) => {
         const extra: PlaceLabel[] = list.map((c, i) => ({ id: `m${i}`, kind: "city", name: c.n, lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
         ALL_CITIES = [...CITIES, ...extra];
+        BY_ISO = null;
         SORTED = [...COUNTRIES, ...ALL_CITIES].sort(byPriority);
         return extra.length > 0;
       })
@@ -92,4 +95,91 @@ export function searchPlaces(query: string, limit = 7): PlaceLabel[] {
     seen.add(k);
     return true;
   }).slice(0, limit);
+}
+
+/** Best guess at a place from free text: "Río de Janeiro, Brasil", "Japón", "Kioto". */
+export function resolvePlace(text: string): PlaceLabel | undefined {
+  const parts = text.split(",").map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return undefined;
+  const iso = parts.length > 1 ? countryByName(parts[parts.length - 1])?.iso : undefined;
+  const hits = searchPlaces(parts[0], 12);
+  const exact = hits.filter((h) => norm(h.name) === norm(parts[0]));
+  return (iso && (exact.find((h) => h.iso === iso) || hits.find((h) => h.iso === iso))) || exact[0] || hits[0];
+}
+
+// ---------------------------------------------------------------- countries as areas, not points
+
+let BY_ISO: Map<string, PlaceLabel[]> | null = null;
+function citiesOf(iso: string): PlaceLabel[] {
+  if (!BY_ISO) {
+    BY_ISO = new Map();
+    for (const c of ALL_CITIES) {
+      const l = BY_ISO.get(c.iso);
+      if (l) l.push(c); else BY_ISO.set(c.iso, [c]);
+    }
+  }
+  return BY_ISO.get(iso) || [];
+}
+
+/** Points that outline a country: its towns (thinned out for big countries) plus its centre. */
+function outline(iso: string, max = 260): LatLng[] {
+  const list = citiesOf(iso);
+  const step = Math.max(1, Math.ceil(list.length / max));
+  const pts: LatLng[] = list.filter((_, i) => i % step === 0);
+  const c = COUNTRY_BY_ISO.get(iso);
+  if (c) pts.push(c);
+  return pts;
+}
+
+/** Rough distance from a point to a country (0 if it's inside, as far as its towns tell): km to its nearest town. */
+export function kmToCountry(iso: string, p: LatLng): number {
+  let best = Infinity;
+  for (const x of outline(iso, 2000)) best = Math.min(best, distanceKm(x, p));
+  return best;
+}
+
+// Cheap flat distance for bulk comparisons (good to a few % at these scales).
+const flatKm = (a: LatLng, b: LatLng) => {
+  const k = Math.PI / 180;
+  let dLng = Math.abs(a.lng - b.lng);
+  if (dLng > 180) dLng = 360 - dLng;
+  const x = dLng * k * Math.cos(((a.lat + b.lat) / 2) * k), y = (a.lat - b.lat) * k;
+  return Math.hypot(x, y) * 6371;
+};
+
+export interface NearCountry { iso: string; name: string; km: number; border: boolean }
+const nearCache = new Map<string, NearCountry[]>();
+
+/**
+ * Countries to combine with `iso`: first the ones it shares a land border with, then the
+ * closest across the sea, measured town to town (so Morocco counts as close to Spain even
+ * though their centres are far apart). Within ~1.500 km, and a handful at least for islands.
+ */
+export function nearbyCountries(iso: string, max = 10): NearCountry[] {
+  const key = `${iso}|${max}|${ALL_CITIES.length}`;
+  const hit = nearCache.get(key);
+  if (hit) return hit;
+  const mine = outline(iso, Infinity);
+  if (!mine.length) return [];
+  const best = new Map<string, number>();
+  const others = [...COUNTRIES, ...ALL_CITIES];
+  for (const o of others) {
+    if (o.iso === iso || !COUNTRY_BY_ISO.has(o.iso)) continue;
+    const cur = best.get(o.iso) ?? Infinity;
+    let d = Infinity;
+    for (const m of mine) {
+      // quick reject by latitude alone before the real maths
+      if (Math.abs(m.lat - o.lat) * 111 >= Math.min(cur, d)) continue;
+      d = Math.min(d, flatKm(m, o));
+    }
+    if (d < cur) best.set(o.iso, d);
+  }
+  const land = new Set(LAND_NEIGHBOURS.get(iso) || []);
+  const all: NearCountry[] = [...best.entries()]
+    .map(([i, km]) => ({ iso: i, name: countryName(i), km: land.has(i) ? 0 : Math.round(km), border: land.has(i) }))
+    .sort((a, b) => Number(b.border) - Number(a.border) || a.km - b.km || (best.get(a.iso)! - best.get(b.iso)!));
+  const close = all.filter((c) => c.border || c.km <= 1500);
+  const out = (close.length >= 4 ? close : all.slice(0, 5)).slice(0, Math.max(max, land.size));
+  nearCache.set(key, out);
+  return out;
 }

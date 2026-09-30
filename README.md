@@ -23,7 +23,12 @@ Si el vídeo solo deja claro el país (paisajes sin nombres), la app no inventa 
 - **Tu viaje**: tipo de viaje (lo imprescindible, explorador, histórico, playero…), experiencia (primera vez / intermedio / experto), días recomendados por la app o elegidos, varios países sí/no, viajeros, presupuesto y ciudad de salida. Claude propone la ruta, reparte los días y estima un presupuesto por partidas en euros, con consejos (`/api/plan`).
 - **Riesgos del viaje**: nivel 1–4 como el Ministerio de Asuntos Exteriores, con enlace a su ficha del país. Los países a los que Exteriores desaconseja viajar se marcan siempre como «No viajar» (`lib/risk.ts`).
 - **Rutas sin vueltas**: si una ruta se cruza consigo misma, se reordena (`orderStops` en `lib/geo.ts`).
-- **Toca una ciudad o un país en el globo** para ver su foto y organizar un viaje allí.
+- **Toca una ciudad o un país en el globo** para ver su foto, qué hacer allí y organizar un viaje.
+- **Destinos sí o sí**: al elegir destino puedes añadir sitios concretos a la ruta. Si están en otro país se activa «Varios países»; si quedan lejos avisa (vuelo interno) y si son otro viaje (p. ej. Brasil + Tokio) lo dice antes de añadirlos (`fitFor` en `lib/geo.ts`).
+- **Varios países**: desplegable con banderas de los países con frontera y los más cercanos por mar (`nearbyCountries` en `lib/labels.ts`); eliges cuáles o dejas que decida el planificador.
+- **Editar la ruta**: en el itinerario puedes añadir un destino (se coloca donde menos rodeo supone y se reajustan los días) o quitar paradas; si la ruta está guardada se actualiza también.
+- **Actividades**: eventos, senderismo, montañas, safaris, museos, excursiones de día completo y escapadas con noche fuera, por parada y con filtros (`/api/activities`). En los viajes de la IA llegan solas; en los demás, con un botón.
+- **Rutas guardadas en el globo**: cada una se dibuja como un trazo luminoso de un color neón con puntos discretos; tocando uno se abre la ruta.
 
 ## Ponerla en marcha
 
@@ -63,7 +68,7 @@ Abre tu URL de Vercel en Safari → botón **Compartir** → **Añadir a pantall
 
 ## Coste aproximado
 
-- **Claude**: un vídeo son unos 8 fotogramas + texto (≈6.000 tokens de entrada). Con Sonnet 5 ≈ 2 céntimos por vídeo nuevo; con Haiku 4.5 (`ANTHROPIC_MODEL=claude-haiku-4-5-20251001`) ≈ 1 céntimo. Un plan de viaje ≈ 1-2 céntimos.
+- **Claude**: un vídeo son unos 8 fotogramas + texto (≈6.000 tokens de entrada). Con Sonnet 5 ≈ 2 céntimos por vídeo nuevo; con Haiku 4.5 (`ANTHROPIC_MODEL=claude-haiku-4-5-20251001`) ≈ 1 céntimo. Un plan de viaje ≈ 1-2 céntimos, y sus actividades otro tanto (las mismas paradas se sirven de caché 24 h).
 - **Mapbox**: las teselas de satélite tienen un tramo gratuito mensual amplio; cada usuario carga unas decenas por sesión.
 - **OpenAI** (opcional): solo si un TikTok no trae subtítulos.
 
@@ -76,6 +81,7 @@ app/
   page.tsx              → la app
   api/analyze/route.ts  → POST {url?, text?} → lugares del vídeo
   api/plan/route.ts     → POST {destino, días, presupuesto…} → viaje con presupuesto
+  api/activities/route.ts → POST {stops} → actividades por parada
   manifest.ts           → instalación como app (PWA)
 components/
   App.tsx               → pantallas, estado y flujos
@@ -83,7 +89,9 @@ components/
   Sheet.tsx             → hojas deslizables inferiores
   PickSheet.tsx         → «¿Cuáles te han gustado?»
   PlannerSheet.tsx      → «Crea tu viaje»
-  ItinerarySheet.tsx    → itinerario con fotos y presupuesto
+  ItinerarySheet.tsx    → itinerario con fotos, presupuesto, actividades y edición de paradas
+  PlaceSearch.tsx       → buscador de lugares reutilizable y avisos de distancia
+  Activities.tsx        → tarjetas y filtros de actividades
 lib/
   video.ts              → leer TikTok / Instagram (texto + imágenes)
   frames.ts             → fotogramas con ffmpeg
@@ -92,7 +100,7 @@ lib/
   risk.ts               → niveles de riesgo y enlaces a Exteriores
   wiki.ts               → fotos y descripción de cada lugar (Wikipedia)
   extract.ts            → Claude → ruta validada
-  geo.ts                → distancias, encuadre de cámara
+  geo.ts                → distancias, encuadre de cámara, dónde insertar una parada y si encaja
   demo.ts               → rutas de ejemplo y lugares iniciales
 public/textures/        → Tierra (NASA Blue Marble, dominio público), relieve y máscara de océano
 public/cities.json      → ~8.000 ciudades más (se cargan tras abrir la app)

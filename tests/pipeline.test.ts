@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectPlatform, parseTikTokPage, parseInstagramPage, parseTikwm, vttToText } from "../lib/video.ts";
-import { toCandidates, toPlanRoute, buildVideoText, buildPlanPrompt } from "../lib/extract.ts";
+import { toCandidates, toPlanRoute, buildVideoText, buildPlanPrompt, toActivities, buildActivitiesPrompt } from "../lib/extract.ts";
 import { frameTimes, parseDuration } from "../lib/frames.ts";
-import { withDayRanges, routeFromCandidates } from "../lib/itinerary.ts";
-import { altitudeForSpread, centroid, frame, orderStops, routeKm, spreadDeg, wholeGlobeAltitude } from "../lib/geo.ts";
-import { countryName, flag, searchPlaces, visibleLabels } from "../lib/labels.ts";
+import { withDayRanges, routeFromCandidates, addStop, removeStop, stopDays } from "../lib/itinerary.ts";
+import { altitudeForSpread, bestInsertIndex, centroid, fitFor, fitInTrip, frame, orderStops, routeKm, spreadDeg, wholeGlobeAltitude } from "../lib/geo.ts";
+import { countryName, flag, kmToCountry, nearbyCountries, resolvePlace, searchPlaces, visibleLabels } from "../lib/labels.ts";
 import { normalizeRisk } from "../lib/risk.ts";
 import { READY_TRIPS, readyRoute } from "../lib/trips.ts";
 
@@ -228,4 +228,99 @@ test("ready-made trips are valid routes", () => {
     // hand-written routes don't zig-zag, so the optimiser leaves them alone
     assert.deepEqual(orderStops(r.stops).map((s) => s.name), r.stops.map((s) => s.name), `${t.id} would be reordered`);
   }
+});
+
+// ---------------------------------------------------------------- adding stops, neighbours, activities
+
+const BRASIL = [
+  { name: "Río de Janeiro", country: "Brasil", sub: "", note: "", when: "Días 1–3", lat: -22.91, lng: -43.17, days: 3 },
+  { name: "São Paulo", country: "Brasil", sub: "", note: "", when: "Días 4–5", lat: -23.55, lng: -46.63, days: 2 },
+  { name: "Salvador", country: "Brasil", sub: "", note: "", when: "Días 6–8", lat: -12.97, lng: -38.5, days: 3 },
+];
+
+test("a new stop goes where it adds the fewest km, and the days shift after it", () => {
+  const route = { id: "b", name: "Brasil", days: 8, stops: BRASIL, kind: "plan" as const };
+  // Paraty sits between Rio and São Paulo
+  const { route: r, at } = addStop(route, { name: "Paraty", country: "Brasil", sub: "", note: "", lat: -23.22, lng: -44.71, days: 1 });
+  assert.equal(at, 1);
+  assert.deepEqual(r.stops.map((s) => s.name), ["Río de Janeiro", "Paraty", "São Paulo", "Salvador"]);
+  assert.deepEqual(r.stops.map((s) => s.when), ["Días 1–3", "Día 4", "Días 5–6", "Días 7–9"]);
+  assert.equal(r.days, 9);
+  assert.equal(r.stops[1].added, true);
+  assert.equal(r.edited, true);
+  // Florianópolis (south of São Paulo) is best inserted after it, not at the start
+  assert.equal(bestInsertIndex([BRASIL[0], BRASIL[1]], { lat: -27.6, lng: -48.55 }), 2);
+  const shorter = removeStop(r, 1);
+  assert.deepEqual(shorter.stops.map((s) => s.when), ["Días 1–3", "Días 4–5", "Días 6–8"]);
+});
+
+test("stops without a day count keep the length from their label (demo routes)", () => {
+  assert.equal(stopDays({ when: "Días 3–5" }), 3);
+  assert.equal(stopDays({ when: "Día 8" }), 1);
+  assert.equal(stopDays({ days: 2, when: "Día 1" }), 2);
+});
+
+test("places far from the trip are flagged: a transfer, or another trip altogether", () => {
+  assert.equal(fitFor(400), "near");
+  assert.equal(fitFor(1600), "far");
+  assert.equal(fitFor(9000), "tooFar");
+  // a trip that already jumps across Africa tolerates longer jumps
+  assert.equal(fitFor(4000, 5000), "near");
+  const iguazu = fitInTrip(BRASIL, { lat: -25.69, lng: -54.44 });
+  assert.equal(iguazu.fit, "near");
+  assert.equal(BRASIL[iguazu.nearest].name, "São Paulo");
+  assert.equal(fitInTrip(BRASIL, { lat: 35.68, lng: 139.69 }).fit, "tooFar"); // Tokio
+  // Buenos Aires, ~1.700 km from São Paulo: a flight from a Rio–São Paulo trip, an ordinary hop for one that already flies to Salvador
+  assert.equal(fitInTrip(BRASIL.slice(0, 2), { lat: -34.6, lng: -58.38 }).fit, "far");
+  assert.equal(fitInTrip(BRASIL, { lat: -34.6, lng: -58.38 }).fit, "near");
+  assert.equal(fitInTrip(BRASIL, { lat: -12.05, lng: -77.04 }).fit, "tooFar"); // Lima, ~3.500 km
+});
+
+test("nearby countries are measured town to town, with flags", () => {
+  const br = nearbyCountries("BR").map((c) => c.iso);
+  for (const iso of ["AR", "UY", "PY", "BO", "PE", "CO", "VE"]) assert.ok(br.includes(iso), `${iso} next to Brasil`);
+  assert.equal(nearbyCountries("BR").find((c) => c.iso === "PY")!.border, true, "Brasil and Paraguay touch");
+  assert.equal(nearbyCountries("BR")[0].border, true, "land neighbours come first");
+  assert.ok(!br.includes("ES"));
+  const es = nearbyCountries("ES").map((c) => c.iso);
+  for (const iso of ["PT", "FR", "MA", "AD"]) assert.ok(es.slice(0, 6).includes(iso), `${iso} next to España`);
+  assert.ok(nearbyCountries("TH").some((c) => c.iso === "ID" && !c.border), "Indonesia is close to Thailand by sea");
+  assert.ok(nearbyCountries("IS").length >= 4, "islands still get a few options");
+  assert.ok(kmToCountry("BR", { lat: -22.91, lng: -43.17 }) < 50);
+  assert.ok(kmToCountry("BR", { lat: -34.9, lng: -56.16 }) < 900); // Montevideo
+});
+
+test("resolvePlace reads what the planner prefills", () => {
+  assert.equal(resolvePlace("Japón")?.iso, "JP");
+  assert.equal(resolvePlace("Japón")?.kind, "country");
+  const rio = resolvePlace("Río de Janeiro, Brasil");
+  assert.equal(rio?.iso, "BR");
+  assert.equal(rio?.kind, "city");
+  assert.equal(resolvePlace("Vietnam, Camboya y Tailandia")?.iso, "VN");
+});
+
+test("plan prompt carries must-see places and the countries the traveller picked", () => {
+  const p = buildPlanPrompt({ destination: "Brasil", travelers: 2, budget: "medio", multiCountry: true, countries: ["Argentina", "Uruguay"], mustSee: ["Paraty, Brasil", "Cataratas del Iguazú"] });
+  assert.match(p, /estos países elegidos por el viajero: Argentina, Uruguay/);
+  assert.match(p, /Paradas obligatorias[^\n]*Paraty, Brasil; Cataratas del Iguazú/);
+  assert.doesNotMatch(buildPlanPrompt({ destination: "Brasil", travelers: 2, budget: "medio" }), /obligatorias/);
+});
+
+test("toActivities keeps one list per stop and fixes unknown kinds", () => {
+  const a = toActivities({ stops: [
+    { index: 2, activities: [
+      { name: "Trek de Salkantay", kind: "senderismo", length: "noche fuera", note: "4 días hasta Machu Picchu", season: "mayo a septiembre", price: "≈ 450 €", wiki: "Salkantay" },
+      { name: "Clase de cocina", kind: "cooking", length: "horas", note: "Ceviche y lomo saltado" },
+      { name: "", kind: "museo", length: "horas", note: "sin nombre" },
+    ] },
+    { index: 9, activities: [{ name: "fuera de rango", kind: "museo", length: "horas", note: "" }] },
+  ] }, 3);
+  assert.equal(a.length, 3);
+  assert.equal(a[0].length, 0);
+  assert.equal(a[1].length, 2);
+  assert.equal(a[1][0].length, "noche fuera");
+  assert.equal(a[1][1].kind, "excursión");
+  assert.equal(a[2].length, 0);
+  assert.throws(() => toActivities({ stops: [] }, 2), /No he encontrado/);
+  assert.match(buildActivitiesPrompt({ stops: [{ name: "Cuzco", country: "Perú", days: 4 }], styles: ["Explorador"] }), /1\. Cuzco, Perú \(4 días\)[\s\S]*Explorador/);
 });

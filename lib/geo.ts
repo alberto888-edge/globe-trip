@@ -147,3 +147,41 @@ export function orderStops<T extends { lat: number; lng: number }>(stops: T[]): 
   if (saving < 0.05 || (!selfCrossing(stops) && saving < 0.3)) return stops;
   return best.map((i) => stops[i]);
 }
+
+// ---------------------------------------------------------------- adding a stop to a trip
+
+/** Where a new stop adds the fewest km: 0 = before the first stop, n = after the last. */
+export function bestInsertIndex(stops: LatLng[], p: LatLng): number {
+  let best = stops.length, extra = Infinity;
+  for (let i = 0; i <= stops.length; i++) {
+    const prev = stops[i - 1], next = stops[i];
+    const add = (prev ? distanceKm(prev, p) : 0) + (next ? distanceKm(p, next) : 0) - (prev && next ? distanceKm(prev, next) : 0);
+    // Starting somewhere new is rarely right (the first stop is where you land), so it has to be clearly better.
+    const cost = i === 0 ? add * 1.3 : add;
+    if (cost < extra - 1e-6) { extra = cost; best = i; }
+  }
+  return best;
+}
+
+export type Fit = "near" | "far" | "tooFar";
+
+/**
+ * Does a place `km` away from the trip fit in it? Up to ~900 km is an ordinary transfer, up to
+ * ~2.500 km needs an internal flight, beyond that it's another trip. Trips that already make
+ * long jumps (`longestLeg`) tolerate proportionally longer ones.
+ */
+export function fitFor(km: number, longestLeg = 0): Fit {
+  if (km <= Math.max(900, longestLeg * 1.2)) return "near";
+  if (km <= Math.max(2500, longestLeg * 1.8)) return "far";
+  return "tooFar";
+}
+
+/** Distance from a place to the nearest stop of a trip, which stop that is, and how well it fits. */
+export function fitInTrip(stops: LatLng[], p: LatLng): { fit: Fit; km: number; nearest: number } {
+  if (!stops.length) return { fit: "near", km: 0, nearest: -1 };
+  let km = Infinity, nearest = 0;
+  stops.forEach((s, i) => { const d = distanceKm(s, p); if (d < km) { km = d; nearest = i; } });
+  let longest = 0;
+  for (let i = 1; i < stops.length; i++) longest = Math.max(longest, distanceKm(stops[i - 1], stops[i]));
+  return { fit: fitFor(km, longest), km, nearest };
+}
