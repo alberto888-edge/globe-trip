@@ -18,15 +18,12 @@ const WATER_GLSL = `
 {
   vec3 sc = pow(max(diffuseColor.rgb, vec3(0.0)), vec3(1.0 / 2.2));
   float lum = dot(sc, vec3(0.3, 0.59, 0.11));
-  // Wide, gentle thresholds on purpose. JPEG tiles differ slightly from one another,
-  // and a sharp cutoff turned that difference into visible square seams across the sea.
-  float water = smoothstep(0.002, 0.095, sc.b - sc.r) * smoothstep(-0.055, 0.03, sc.b - sc.g) * (1.0 - smoothstep(0.26, 0.62, lum));
-  // The detail term is what carries the tile blocks across open sea, where Mapbox has
-  // little real resolution to give. Keep it near the coast (bright, shallow) and damp it
-  // over deep water, where it is only compression noise.
-  float deep = 1.0 - smoothstep(0.05, 0.22, lum);
-  vec3 lifted = mix(vec3(0.30, 0.56, 0.78), vec3(0.56, 0.80, 0.88), smoothstep(0.0, 0.3, lum)) + (sc - lum) * mix(0.5, 0.12, deep);
-  sc = mix(sc, clamp(lifted, 0.0, 1.0), water * 0.92);
+  // The mask has to be fussy: shadowed mountain slopes and dark forest also read as
+  // slightly blue in satellite imagery, and a loose threshold paints them over. Demand
+  // real blueness, keep the upper end wide so neighbouring tiles don't show a hard seam.
+  float water = smoothstep(0.018, 0.085, sc.b - sc.r) * smoothstep(-0.018, 0.028, sc.b - sc.g) * (1.0 - smoothstep(0.30, 0.56, lum));
+  vec3 lifted = mix(vec3(0.27, 0.51, 0.72), vec3(0.50, 0.74, 0.84), smoothstep(0.0, 0.3, lum)) + (sc - lum) * 0.5;
+  sc = mix(sc, clamp(lifted, 0.0, 1.0), water * 0.88);
   diffuseColor.rgb = pow(sc, vec3(2.2));
 }
 #endif
@@ -270,7 +267,6 @@ export default function GlobeCanvas(props: Props) {
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     sharpenTextures(g.scene(), g.renderer());
     sharpenTileLevels(g.scene());
-    material.bumpScale = 7;
     const c = g.controls();
     c.enableDamping = true;
     c.dampingFactor = 0.08;
@@ -323,10 +319,15 @@ export default function GlobeCanvas(props: Props) {
     const c = globeRef.current?.controls();
     if (c) c.rotateSpeed = Math.min(0.6, 0.06 + pov.altitude * 0.22);
     scheduleSharpen();
+    // The relief bump map is a single low-resolution texture for the whole planet. From
+    // far away it gives the globe its shape; up close its coarse normals smear exactly
+    // the detail the satellite tiles are providing, which is why mountains looked worse
+    // the further you zoomed. Fade it out as the camera comes in.
+    material.bumpScale = pov.altitude > 0.45 ? 7 : Math.max(0, (pov.altitude - 0.12) * 21);
     const q = Math.round(Math.min(3, Math.max(0.05, pov.altitude)) * 20) / 20;
     setAlt((prev) => (prev === q ? prev : q));
     trackView(pov);
-  }, [trackView, scheduleSharpen]);
+  }, [trackView, scheduleSharpen, material]);
 
   // Camera flights
   useEffect(() => {
