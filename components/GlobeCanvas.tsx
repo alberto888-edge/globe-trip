@@ -9,27 +9,98 @@ import type { Pin, Route } from "@/lib/types";
 import { altitudeForSpread, distanceKm, wholeGlobeAltitude } from "@/lib/geo";
 import { loadMorePlaces, visibleLabels, type PlaceLabel } from "@/lib/labels";
 
-// Satellite oceans come out almost black. Lift water to a light, clear blue in every
-// textured material on the globe (the satellite tiles and the fallback texture), keeping
-// the texture's own detail. Water = bluer than it is red or green, and not bright
-// (so shallow turquoise lagoons and snow keep their colour). Tuned on real Mapbox tiles.
-const WATER_GLSL = `
+// ---------------------------------------------------------------- the ocean
+//
+// Satellite tiles are the wrong source for water. Mapbox has real detail over land at
+// every zoom, but over sea it has almost none: past a certain level the tiles are flat
+// blue with JPEG blocks, and those blocks were the patchwork showing up on screen.
+//
+// So the sea stops being photographed and starts being painted. Two global textures the
+// project already ships decide it, sampled by real latitude and longitude so the result
+// is identical at any zoom level:
+//
+//   · earth-water-mask.png — authoritative land/sea. Colour alone can't do this job:
+//     shadowed mountain slopes and dark forest also read as blue, which is what used to
+//     bleed sea over Kyrgyzstan and the Alps. The mask is coarse (1024×512, ~39 km per
+//     texel), so it only decides *regions*, never the shoreline.
+//   · earth.jpg — Blue Marble, which carries real bathymetry and, being one smooth
+//     global image, has no tile blocks anywhere. It drives the colour of open water.
+//
+// Within roughly a texel of the coast the tile's own pixels still rule, so shorelines,
+// reefs and lagoons stay exactly as sharp as the satellite imagery allows.
+const OCEAN_UNIFORMS = `
+uniform sampler2D uSeaMask;
+uniform sampler2D uSeaRef;
+uniform vec2 uSeaMaskTexel;
+varying vec3 vGlobePos;
+`;
+
+// lat/lng from object space. three-globe places a point at
+// x = r·sin(90°−lat)·cos(90°−lng), y = r·cos(90°−lat), z = r·sin(90°−lat)·sin(90°−lng),
+// so latitude comes straight off y and longitude off atan(z, −x) minus a quarter turn.
+const OCEAN_FRAGMENT = `
 #ifdef USE_MAP
 {
+  float gr = max(length(vGlobePos), 1e-4);
+  float lat = degrees(asin(clamp(vGlobePos.y / gr, -1.0, 1.0)));
+  float lng = degrees(atan(vGlobePos.z, -vGlobePos.x)) - 90.0;
+  lng = mod(lng + 540.0, 360.0) - 180.0;
+  vec2 guv = vec2((lng + 180.0) / 360.0, (lat + 90.0) / 180.0);
+
+  float sea = texture2D(uSeaMask, guv).r;
+  // Sea here and sea one texel in every direction means open water, far enough from any
+  // coast that the painted colour can take over completely.
+  float openRaw = min(
+    min(texture2D(uSeaMask, guv + vec2(uSeaMaskTexel.x, 0.0)).r,
+        texture2D(uSeaMask, guv - vec2(uSeaMaskTexel.x, 0.0)).r),
+    min(texture2D(uSeaMask, guv + vec2(0.0, uSeaMaskTexel.y)).r,
+        texture2D(uSeaMask, guv - vec2(0.0, uSeaMaskTexel.y)).r)) * sea;
+  float open = smoothstep(0.45, 0.95, openRaw);
+
   vec3 sc = pow(max(diffuseColor.rgb, vec3(0.0)), vec3(1.0 / 2.2));
   float lum = dot(sc, vec3(0.3, 0.59, 0.11));
-  // The mask has to be fussy: shadowed mountain slopes and dark forest also read as
-  // slightly blue in satellite imagery, and a loose threshold paints them over. Demand
-  // real blueness, keep the upper end wide so neighbouring tiles don't show a hard seam.
-  float water = smoothstep(0.018, 0.085, sc.b - sc.r) * smoothstep(-0.018, 0.028, sc.b - sc.g) * (1.0 - smoothstep(0.30, 0.56, lum));
-  vec3 lifted = mix(vec3(0.27, 0.51, 0.72), vec3(0.50, 0.74, 0.84), smoothstep(0.0, 0.3, lum)) + (sc - lum) * 0.5;
-  sc = mix(sc, clamp(lifted, 0.0, 1.0), water * 0.88);
+
+  // Inside the coastal band the tile decides, by colour, what is water. Gated by the
+  // mask, so it can never fire inland.
+  float fine = smoothstep(0.012, 0.07, sc.b - sc.r)
+             * smoothstep(-0.02, 0.03, sc.b - sc.g)
+             * (1.0 - smoothstep(0.32, 0.60, lum))
+             * smoothstep(0.25, 0.75, sea);
+
+  vec3 ref = pow(max(texture2D(uSeaRef, guv).rgb, vec3(0.0)), vec3(1.0 / 2.2));
+  float depth = smoothstep(0.011, 0.46, dot(ref, vec3(0.3, 0.59, 0.11)));
+  vec3 painted = depth < 0.5
+    ? mix(vec3(0.050, 0.145, 0.285), vec3(0.095, 0.275, 0.445), depth * 2.0)
+    : mix(vec3(0.095, 0.275, 0.445), vec3(0.235, 0.510, 0.635), depth * 2.0 - 1.0);
+  // Near the coast, carry the tile's own colour variation into the paint: that is the
+  // surf, the reefs and the river plumes, and it is worth keeping.
+  painted += (sc - lum) * 0.40 * (1.0 - open);
+
+  float water = max(fine, open);
+  sc = mix(sc, clamp(painted, 0.0, 1.0), water);
   diffuseColor.rgb = pow(sc, vec3(2.2));
 }
 #endif
 `;
-const chunks = THREE.ShaderChunk as unknown as Record<string, string>;
-if (!chunks.map_fragment.includes("lifted")) chunks.map_fragment += WATER_GLSL;
+
+/** Teaches one textured material to paint its own water. Safe to call twice. */
+function paintOcean(mat: THREE.Material, mask: THREE.Texture, ref: THREE.Texture) {
+  const m = mat as THREE.Material & { __ocean?: boolean };
+  if (m.__ocean) return;
+  m.__ocean = true;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uSeaMask = { value: mask };
+    shader.uniforms.uSeaRef = { value: ref };
+    shader.uniforms.uSeaMaskTexel = { value: new THREE.Vector2(1 / 1024, 1 / 512) };
+    shader.vertexShader = shader.vertexShader
+      .replace("void main() {", "varying vec3 vGlobePos;\nvoid main() {")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\n  vGlobePos = position;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("void main() {", `${OCEAN_UNIFORMS}\nvoid main() {`)
+      .replace("#include <map_fragment>", `#include <map_fragment>\n${OCEAN_FRAGMENT}`);
+  };
+  m.needsUpdate = true;
+}
 
 /** Where the camera should fly. `spread` = degrees of arc that must fit on screen; `home` = whole globe. */
 export interface Focus { lat: number; lng: number; spread?: number; home?: boolean; key: number; ms?: number }
@@ -98,13 +169,35 @@ function useViewport() {
 // Shifting the ladder by two levels asks for four times the linear detail at every
 // distance. Nothing else about the engine changes.
 const TILE_LEVEL_BOOST = 2;
-function sharpenTileLevels(scene: THREE.Object3D) {
+
+/**
+ * Finds the tile engine inside the scene and sets it up once: a sharper level ladder,
+ * and water painting applied to every tile the moment it is added, before it can be
+ * rendered unpainted for a frame.
+ */
+function setupTileEngine(scene: THREE.Object3D, mask: THREE.Texture, ref: THREE.Texture) {
   let done = false;
   scene.traverse((o) => {
-    const e = o as unknown as { thresholds?: number[]; maxLevel?: number; __boosted?: boolean };
-    if (done || e.__boosted || !Array.isArray(e.thresholds) || typeof e.maxLevel !== "number") return;
-    e.__boosted = true;
+    const e = o as unknown as {
+      thresholds?: number[]; maxLevel?: number; __tuned?: boolean;
+      add: (...objs: THREE.Object3D[]) => THREE.Object3D;
+    };
+    if (done || e.__tuned || !Array.isArray(e.thresholds) || typeof e.maxLevel !== "number") return;
+    e.__tuned = true;
     e.thresholds = e.thresholds.map((t) => t * Math.pow(2, TILE_LEVEL_BOOST));
+    const add = e.add.bind(e);
+    e.add = (...objs: THREE.Object3D[]) => {
+      for (const obj of objs) {
+        const mat = (obj as THREE.Mesh).material;
+        if (mat) for (const m of Array.isArray(mat) ? mat : [mat]) paintOcean(m, mask, ref);
+      }
+      return add(...objs);
+    };
+    // Tiles already in place when we get here (the first level loads fast).
+    (o as THREE.Object3D).traverse((c) => {
+      const mat = (c as THREE.Mesh).material;
+      if (mat) for (const m of Array.isArray(mat) ? mat : [mat]) paintOcean(m, mask, ref);
+    });
     done = true;
   });
   return done;
@@ -245,16 +338,36 @@ export default function GlobeCanvas(props: Props) {
     return () => mq.removeEventListener("change", read);
   }, []);
 
+  // The two global textures the ocean is painted from. Loaded once, shared by every tile.
+  const seaTex = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    const mask = loader.load("/textures/earth-water-mask.png");
+    const ref = loader.load("/textures/earth.jpg");
+    for (const t of [mask, ref]) {
+      t.wrapS = THREE.RepeatWrapping;   // longitude wraps round
+      t.wrapT = THREE.ClampToEdgeWrapping; // latitude stops at the poles
+      t.magFilter = THREE.LinearFilter;
+    }
+    // The mask is small enough that it never really minifies, and mipmapping it would
+    // only soften coastlines. The colour reference does minify when the whole globe is
+    // on screen, so it keeps its mipmaps and stays free of shimmer while rotating.
+    mask.minFilter = THREE.LinearFilter;
+    mask.generateMipmaps = false;
+    ref.minFilter = THREE.LinearMipmapLinearFilter;
+    ref.generateMipmaps = true;
+    ref.colorSpace = THREE.SRGBColorSpace;
+    return { mask, ref };
+  }, []);
+
   // Phong material: globe.gl fills in the colour map + bump map; we add ocean glints.
+  // Used only when satellite tiles are unavailable, but it paints its water the same way.
   const material = useMemo(() => {
     const m = new THREE.MeshPhongMaterial({ shininess: 16 });
-    new THREE.TextureLoader().load("/textures/earth-water-mask.png", (t) => {
-      m.specularMap = t;
-      m.specular = new THREE.Color("#3a4c5e");
-      m.needsUpdate = true;
-    });
+    m.specularMap = seaTex.mask;
+    m.specular = new THREE.Color("#3a4c5e");
+    paintOcean(m, seaTex.mask, seaTex.ref);
     return m;
-  }, []);
+  }, [seaTex]);
 
   const setAutoRotate = useCallback((on: boolean) => {
     const c = globeRef.current?.controls();
@@ -266,7 +379,7 @@ export default function GlobeCanvas(props: Props) {
     if (!g) return;
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     sharpenTextures(g.scene(), g.renderer());
-    sharpenTileLevels(g.scene());
+    setupTileEngine(g.scene(), seaTex.mask, seaTex.ref);
     const c = g.controls();
     c.enableDamping = true;
     c.dampingFactor = 0.08;
@@ -290,7 +403,7 @@ export default function GlobeCanvas(props: Props) {
     setAutoRotate(true);
     setReady(true);
     handlers.current.onReady?.();
-  }, [material, setAutoRotate, homeAltitude]);
+  }, [material, setAutoRotate, homeAltitude, seaTex]);
 
   // Keep the zoom-out limit in step with the screen shape (rotation, keyboard, panels).
   useEffect(() => {
@@ -309,10 +422,10 @@ export default function GlobeCanvas(props: Props) {
     let left = 8;
     sharpenTimer.current = setInterval(() => {
       const gg = globeRef.current;
-      if (gg) { sharpenTileLevels(gg.scene()); sharpenTextures(gg.scene(), gg.renderer()); }
+      if (gg) { setupTileEngine(gg.scene(), seaTex.mask, seaTex.ref); sharpenTextures(gg.scene(), gg.renderer()); }
       if (--left <= 0 && sharpenTimer.current) { clearInterval(sharpenTimer.current); sharpenTimer.current = null; }
     }, 450);
-  }, []);
+  }, [seaTex]);
   useEffect(() => () => { if (sharpenTimer.current) clearInterval(sharpenTimer.current); }, []);
 
   const handleZoom = useCallback((pov: { lat: number; lng: number; altitude: number }) => {
