@@ -5,9 +5,13 @@
 import Globe, { type GlobeMethods } from "react-globe.gl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { Pin, Route } from "@/lib/types";
 import { altitudeForSpread, distanceKm, wholeGlobeAltitude } from "@/lib/geo";
 import { loadMorePlaces, visibleLabels, type PlaceLabel } from "@/lib/labels";
+import { MAX_TILE_LEVEL, tileThresholds } from "@/lib/tiles";
 
 // ---------------------------------------------------------------- the ocean
 //
@@ -138,13 +142,20 @@ const TOPBAR = 70; // px reserved at the top for the header
 // Satellite imagery at every zoom level (one consistent look, sharp up close).
 // Either a full XYZ template, or a Mapbox public token to build one. Without
 // either, the globe uses the bundled Blue Marble texture.
-const TILE_TEMPLATE =
-  process.env.NEXT_PUBLIC_SATELLITE_TILES ||
-  (process.env.NEXT_PUBLIC_MAPBOX_TOKEN
-    ? `https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`
-    : "");
+const CUSTOM_TILES = process.env.NEXT_PUBLIC_SATELLITE_TILES || "";
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
+const HAS_TILES = Boolean(CUSTOM_TILES || MAPBOX_TOKEN);
+
+// JPEG quality by zoom level. A wide view needs many tiles and shows each one small,
+// so compression artefacts are invisible there and the bytes matter; a close view
+// needs few tiles and every pixel is on show. Same pixel count either way, far fewer
+// bytes when it counts.
+const tileQuality = (z: number) => (z <= 4 ? "jpg70" : z <= 6 ? "jpg80" : "jpg90");
+
 const tileUrl = (x: number, y: number, z: number) =>
-  TILE_TEMPLATE.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
+  CUSTOM_TILES
+    ? CUSTOM_TILES.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y))
+    : `https://api.mapbox.com/v4/mapbox.satellite/${z}/${x}/${y}@2x.${tileQuality(z)}?access_token=${MAPBOX_TOKEN}`;
 
 function useViewport() {
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -162,29 +173,24 @@ function useViewport() {
 // seen at an angle — which on a sphere is most of what you look at — turns to mush as
 // soon as you zoom in. The tile engine creates them itself, so we walk the scene and
 // upgrade whatever is new. Textures are tagged once so repeat passes cost nothing.
-// three-slippy-map-globe picks the tile zoom level from a fixed ladder: it only steps up
-// a level when the camera gets twice as close, starting at 8 globe radii. That ladder is
-// two levels too conservative for a phone screen — at the distance you actually look at a
-// country from, it is still serving continent-sized tiles, which is the blur you see.
-// Shifting the ladder by two levels asks for four times the linear detail at every
-// distance. Nothing else about the engine changes.
-const TILE_LEVEL_BOOST = 2;
+type TileEngine = {
+  thresholds: number[];
+  maxLevel: number;
+  __tuned?: boolean;
+  add: (...objs: THREE.Object3D[]) => THREE.Object3D;
+};
 
-/**
- * Finds the tile engine inside the scene and sets it up once: a sharper level ladder,
- * and water painting applied to every tile the moment it is added, before it can be
- * rendered unpainted for a frame.
- */
-function setupTileEngine(scene: THREE.Object3D, mask: THREE.Texture, ref: THREE.Texture) {
-  let done = false;
+function setupTileEngine(scene: THREE.Object3D, mask: THREE.Texture, ref: THREE.Texture, thresholds: number[]): TileEngine | null {
+  let found: TileEngine | null = null;
   scene.traverse((o) => {
-    const e = o as unknown as {
-      thresholds?: number[]; maxLevel?: number; __tuned?: boolean;
-      add: (...objs: THREE.Object3D[]) => THREE.Object3D;
-    };
-    if (done || e.__tuned || !Array.isArray(e.thresholds) || typeof e.maxLevel !== "number") return;
+    const e = o as unknown as TileEngine;
+    if (found || !Array.isArray(e.thresholds) || typeof e.maxLevel !== "number") return;
+    found = e;
+    if (e.__tuned) return;
     e.__tuned = true;
-    e.thresholds = e.thresholds.map((t) => t * Math.pow(2, TILE_LEVEL_BOOST));
+    e.thresholds = thresholds;
+    // Belt and braces: even a malformed ladder can then only ask for a sane level.
+    e.maxLevel = Math.min(e.maxLevel, MAX_TILE_LEVEL);
     const add = e.add.bind(e);
     e.add = (...objs: THREE.Object3D[]) => {
       for (const obj of objs) {
@@ -198,9 +204,8 @@ function setupTileEngine(scene: THREE.Object3D, mask: THREE.Texture, ref: THREE.
       const mat = (c as THREE.Mesh).material;
       if (mat) for (const m of Array.isArray(mat) ? mat : [mat]) paintOcean(m, mask, ref);
     });
-    done = true;
   });
-  return done;
+  return found;
 }
 
 const SHARPENED = Symbol("sharpened");
@@ -258,9 +263,9 @@ export default function GlobeCanvas(props: Props) {
   // Decide once, before the globe appears, whether satellite tiles work. If the
   // source is down or misconfigured the globe uses its texture instead of going blank,
   // and it never swaps imagery while you're looking at it.
-  const [tiles, setTiles] = useState<"pending" | "on" | "off">(TILE_TEMPLATE ? "pending" : "off");
+  const [tiles, setTiles] = useState<"pending" | "on" | "off">(HAS_TILES ? "pending" : "off");
   useEffect(() => {
-    if (!TILE_TEMPLATE) return;
+    if (!HAS_TILES) return;
     let done = false;
     const finish = (v: "on" | "off") => { if (!done) { done = true; setTiles(v); } };
     const img = new Image();
@@ -277,12 +282,24 @@ export default function GlobeCanvas(props: Props) {
     loadMorePlaces().then((ok) => { if (ok) setView((v) => ({ ...v })); });
   }, []);
 
-  // Country borders: one thin line mesh, just above the ground.
+  // Country borders.
+  //
+  // A single white hairline vanishes over bright ground — deserts, snow, the dry
+  // mountains of Central Asia — which is where borders matter most, because there is no
+  // coastline to read the shape from. The fix is the standard cartographic one: a wider
+  // dark line underneath and a thin bright line on top, so the pair carries its own
+  // contrast onto any background.
+  //
+  // That needs real line width, which WebGL does not give plain lines (linewidth is
+  // ignored almost everywhere), hence three's instanced fat lines. ~19k segments, two
+  // passes, one draw call each.
+  const borderRes = useRef(new THREE.Vector2(1, 1));
   useEffect(() => {
     const g = globeRef.current;
     if (!ready || !g) return;
     let live = true;
-    let lines: THREE.LineSegments | null = null;
+    const added: THREE.Object3D[] = [];
+    const mats: LineMaterial[] = [];
     fetch("/borders.json").then((r) => r.json()).then((data: number[][]) => {
       if (!live) return;
       const pos: number[] = [];
@@ -294,17 +311,41 @@ export default function GlobeCanvas(props: Props) {
           prev = cur;
         }
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-      lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82, depthWrite: false }));
-      lines.renderOrder = 1;
-      g.scene().add(lines);
+      const geo = new LineSegmentsGeometry();
+      geo.setPositions(pos);
+      // halo first, then the bright core on top of it
+      for (const [color, width, opacity, order] of [["#0b1720", 3.4, 0.55, 1], ["#ffffff", 1.25, 0.92, 2]] as const) {
+        const mat = new LineMaterial({
+          color: new THREE.Color(color).getHex(),
+          linewidth: width, // device pixels — worldUnits is off, so zoom doesn't change it
+          transparent: true,
+          opacity,
+          depthWrite: false,
+          resolution: borderRes.current,
+        });
+        const mesh = new LineSegments2(geo, mat);
+        mesh.renderOrder = order;
+        mesh.frustumCulled = false; // one mesh wrapping the whole globe
+        g.scene().add(mesh);
+        added.push(mesh);
+        mats.push(mat);
+      }
     }).catch(() => { /* borders are decoration */ });
     return () => {
       live = false;
-      if (lines) { g.scene().remove(lines); lines.geometry.dispose(); (lines.material as THREE.Material).dispose(); }
+      for (const m of added) {
+        g.scene().remove(m);
+        (m as LineSegments2).geometry.dispose(); // shared, so disposing twice is a no-op
+      }
+      for (const m of mats) m.dispose();
     };
   }, [ready]);
+
+  // Fat lines need the drawing-buffer size to turn their width into pixels.
+  useEffect(() => {
+    const dpr = Math.min(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1, 2);
+    borderRes.current.set(Math.max(1, w * dpr), Math.max(1, h * dpr));
+  }, [w, h]);
 
   // Where the camera is looking, updated a few times a second while moving; drives place labels.
   const [view, setView] = useState({ lat: HOME.lat, lng: HOME.lng, alt: 2.3 });
@@ -338,6 +379,15 @@ export default function GlobeCanvas(props: Props) {
     return () => mq.removeEventListener("change", read);
   }, []);
 
+  const tileEngine = useRef<TileEngine | null>(null);
+  // The zoom ladder depends on the shape of the window, so it is set here and refreshed
+  // on rotation or resize rather than baked in once.
+  useEffect(() => {
+    if (!w || !h) return;
+    const e = tileEngine.current;
+    if (e) e.thresholds = tileThresholds(w / h);
+  }, [w, h, ready]);
+
   // The two global textures the ocean is painted from. Loaded once, shared by every tile.
   const seaTex = useMemo(() => {
     const loader = new THREE.TextureLoader();
@@ -367,7 +417,7 @@ export default function GlobeCanvas(props: Props) {
     m.specular = new THREE.Color("#3a4c5e");
     paintOcean(m, seaTex.mask, seaTex.ref);
     return m;
-  }, [seaTex]);
+  }, [seaTex, w, h]);
 
   const setAutoRotate = useCallback((on: boolean) => {
     const c = globeRef.current?.controls();
@@ -379,7 +429,7 @@ export default function GlobeCanvas(props: Props) {
     if (!g) return;
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     sharpenTextures(g.scene(), g.renderer());
-    setupTileEngine(g.scene(), seaTex.mask, seaTex.ref);
+    tileEngine.current = setupTileEngine(g.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h)));
     const c = g.controls();
     c.enableDamping = true;
     c.dampingFactor = 0.08;
@@ -403,7 +453,7 @@ export default function GlobeCanvas(props: Props) {
     setAutoRotate(true);
     setReady(true);
     handlers.current.onReady?.();
-  }, [material, setAutoRotate, homeAltitude, seaTex]);
+  }, [material, setAutoRotate, homeAltitude, seaTex, w, h]);
 
   // Keep the zoom-out limit in step with the screen shape (rotation, keyboard, panels).
   useEffect(() => {
@@ -422,10 +472,13 @@ export default function GlobeCanvas(props: Props) {
     let left = 8;
     sharpenTimer.current = setInterval(() => {
       const gg = globeRef.current;
-      if (gg) { setupTileEngine(gg.scene(), seaTex.mask, seaTex.ref); sharpenTextures(gg.scene(), gg.renderer()); }
+      if (gg) {
+        tileEngine.current = setupTileEngine(gg.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h))) ?? tileEngine.current;
+        sharpenTextures(gg.scene(), gg.renderer());
+      }
       if (--left <= 0 && sharpenTimer.current) { clearInterval(sharpenTimer.current); sharpenTimer.current = null; }
     }, 450);
-  }, [seaTex]);
+  }, [seaTex, w, h]);
   useEffect(() => () => { if (sharpenTimer.current) clearInterval(sharpenTimer.current); }, []);
 
   const handleZoom = useCallback((pov: { lat: number; lng: number; altitude: number }) => {
@@ -603,7 +656,7 @@ export default function GlobeCanvas(props: Props) {
   const tilesOn = tiles === "on";
   return (
     <>
-    {tilesOn && process.env.NEXT_PUBLIC_MAPBOX_TOKEN && !process.env.NEXT_PUBLIC_SATELLITE_TILES && (
+    {tilesOn && MAPBOX_TOKEN && !CUSTOM_TILES && (
       <div className="attribution">© Mapbox © Maxar © OpenStreetMap</div>
     )}
     <Globe
