@@ -62,7 +62,8 @@ export default function Page() {
       <ul>
         <li><strong>Vercel</strong> — alojamiento y ejecución del servidor.</li>
         <li><strong>Anthropic</strong> — el modelo que lee los fotogramas e identifica lugares. Recibe las imágenes y el texto del vídeo, no datos personales tuyos.</li>
-        <li><strong>Mapbox</strong> — imágenes de satélite y geocodificación.</li>
+        <li><strong>Esri (ArcGIS)</strong> — imágenes de satélite del globo. Tu navegador las descarga directamente de sus servidores, que ven tu dirección IP.</li>
+        <li><strong>Mapbox</strong> — geocodificación de los lugares detectados.</li>
         <li><strong>TikTok e Instagram</strong> — se consulta el contenido público del enlace que pegas.</li>
       </ul>
       <p>Nunca se venden ni se ceden datos con fines publicitarios.</p>
