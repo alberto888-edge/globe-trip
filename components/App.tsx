@@ -1,5 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Activity, AnalyzeOk, AnalyzeResponse, Candidate, Pin, PinType, PlanRequest, PlanResponse, Route } from "@/lib/types";
 import { DEMO_ROUTES, EXAMPLES, SEED_PINS } from "@/lib/demo";
@@ -369,6 +370,17 @@ export default function App() {
 
       <div className="bottom" ref={bottomRef}>
         <span className={`hint glass ${hinted || route || analysis ? "gone" : ""}`}>Arrastra para girar · toca para marcar</span>
+
+        {/* The LSSI requires the legal notice to be permanently reachable, so these
+            stay on screen whenever the app is idle. */}
+        {!route && !analysis && (
+          <nav className="legal-links">
+            <Link href="/legal/aviso-legal">Aviso legal</Link>
+            <Link href="/legal/privacidad">Privacidad</Link>
+            <Link href="/legal/cookies">Cookies</Link>
+            <Link href="/legal/afiliacion">Afiliación</Link>
+          </nav>
+        )}
 
         {analysis && (
           <section className="analysis glass" aria-live="polite">
