@@ -146,16 +146,13 @@ const CUSTOM_TILES = process.env.NEXT_PUBLIC_SATELLITE_TILES || "";
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const HAS_TILES = Boolean(CUSTOM_TILES || MAPBOX_TOKEN);
 
-// JPEG quality by zoom level. A wide view needs many tiles and shows each one small,
-// so compression artefacts are invisible there and the bytes matter; a close view
-// needs few tiles and every pixel is on show. Same pixel count either way, far fewer
-// bytes when it counts.
-const tileQuality = (z: number) => (z <= 4 ? "jpg70" : z <= 6 ? "jpg80" : "jpg90");
-
+// One format at every level. Asking Mapbox for cheaper JPEG on wide views (jpg70/jpg80)
+// looked like free bytes, but those tiles never arrived: wide views came back almost
+// black while close views — the only ones still on jpg90 — were fine.
 const tileUrl = (x: number, y: number, z: number) =>
   CUSTOM_TILES
     ? CUSTOM_TILES.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y))
-    : `https://api.mapbox.com/v4/mapbox.satellite/${z}/${x}/${y}@2x.${tileQuality(z)}?access_token=${MAPBOX_TOKEN}`;
+    : `https://api.mapbox.com/v4/mapbox.satellite/${z}/${x}/${y}@2x.jpg90?access_token=${MAPBOX_TOKEN}`;
 
 function useViewport() {
   const [size, setSize] = useState({ w: 0, h: 0 });
