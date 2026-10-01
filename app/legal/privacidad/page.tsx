@@ -15,8 +15,8 @@ export default function Page() {
 
       <h2>Quién trata tus datos</h2>
       <p>
-        El responsable es {OWNER.name} ({OWNER.taxId}). Para cualquier cuestión sobre
-        privacidad: {OWNER.email}.
+        El responsable es {OWNER.name}{OWNER.taxId ? ` (${OWNER.taxId})` : ""}. Para
+        cualquier cuestión sobre privacidad: {OWNER.email}.
       </p>
 
       <h2>Qué datos se tratan</h2>

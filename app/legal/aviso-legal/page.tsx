@@ -16,7 +16,7 @@ export default function Page() {
       <h2>Titular</h2>
       <dl>
         <dt>Responsable</dt><dd>{OWNER.name}</dd>
-        <dt>NIF</dt><dd>{OWNER.taxId}</dd>
+        {OWNER.taxId && (<><dt>NIF</dt><dd>{OWNER.taxId}</dd></>)}
         <dt>Correo de contacto</dt><dd>{OWNER.email}</dd>
         <dt>País</dt><dd>{OWNER.country}</dd>
         <dt>Sitio web</dt><dd>{SITE.url}</dd>
