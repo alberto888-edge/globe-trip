@@ -1,0 +1,14 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const log = [];
+page.on("response", (r) => { if (r.url().includes("mapbox")) log.push(`${r.status()} ${r.url().split("?")[0].replace(/^.*satellite\//, "sat/")} ${r.headers()["x-cache"] ?? ""}`); });
+page.on("requestfailed", (r) => { if (r.url().includes("mapbox")) log.push(`FALLO ${r.failure()?.errorText} ${r.url().split("?")[0]}`); });
+await page.goto("https://globe-trip-tau.vercel.app/", { waitUntil: "load" });
+await page.waitForSelector("canvas", { timeout: 60000 });
+await page.waitForTimeout(10000);
+console.log("peticiones a mapbox:", log.length); console.log(log.slice(0, 15).join("\n"));
+console.log("atribucion Mapbox visible:", await page.locator(".attribution").count());
+await page.screenshot({ path: "/tmp/fresco.png", timeout: 180000 });
+console.log("captura ok");
+await browser.close();
