@@ -293,7 +293,17 @@ export default function GlobeCanvas(props: Props) {
   // That needs real line width, which WebGL does not give plain lines (linewidth is
   // ignored almost everywhere), hence three's instanced fat lines. ~19k segments, two
   // passes, one draw call each.
-  const borderRes = useRef(new THREE.Vector2(1, 1));
+  // LineMaterial's `resolution` setter COPIES the vector it is given, so handing it one
+  // at construction and mutating that later silently does nothing — the uniform stays at
+  // its default and the lines render hundreds of times too thick. Always reach through to
+  // the live uniform instead. tests/lines.test.ts pins this down.
+  const borderMats = useRef<LineMaterial[]>([]);
+  const sizeBorders = useCallback((mats: LineMaterial[]) => {
+    const dpr = Math.min(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1, 2);
+    for (const m of mats) m.resolution.set(Math.max(1, w * dpr), Math.max(1, h * dpr));
+  }, [w, h]);
+  useEffect(() => { sizeBorders(borderMats.current); }, [sizeBorders]);
+
   useEffect(() => {
     const g = globeRef.current;
     if (!ready || !g) return;
@@ -314,14 +324,16 @@ export default function GlobeCanvas(props: Props) {
       const geo = new LineSegmentsGeometry();
       geo.setPositions(pos);
       // halo first, then the bright core on top of it
-      for (const [color, width, opacity, order] of [["#0b1720", 3.4, 0.55, 1], ["#ffffff", 1.25, 0.92, 2]] as const) {
+      // Widths are in drawing-buffer pixels, so on a 2x screen these are roughly a 1 px
+      // white line with half a pixel of dark edge either side: about as fine as the old
+      // hairline, but it no longer disappears over desert.
+      for (const [color, width, opacity, order] of [["#0b1720", 3.6, 0.5, 1], ["#ffffff", 1.8, 0.88, 2]] as const) {
         const mat = new LineMaterial({
           color: new THREE.Color(color).getHex(),
-          linewidth: width, // device pixels — worldUnits is off, so zoom doesn't change it
+          linewidth: width,
           transparent: true,
           opacity,
           depthWrite: false,
-          resolution: borderRes.current,
         });
         const mesh = new LineSegments2(geo, mat);
         mesh.renderOrder = order;
@@ -330,6 +342,8 @@ export default function GlobeCanvas(props: Props) {
         added.push(mesh);
         mats.push(mat);
       }
+      borderMats.current = mats;
+      sizeBorders(mats); // before the first frame, never after
     }).catch(() => { /* borders are decoration */ });
     return () => {
       live = false;
@@ -338,14 +352,9 @@ export default function GlobeCanvas(props: Props) {
         (m as LineSegments2).geometry.dispose(); // shared, so disposing twice is a no-op
       }
       for (const m of mats) m.dispose();
+      borderMats.current = [];
     };
-  }, [ready]);
-
-  // Fat lines need the drawing-buffer size to turn their width into pixels.
-  useEffect(() => {
-    const dpr = Math.min(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1, 2);
-    borderRes.current.set(Math.max(1, w * dpr), Math.max(1, h * dpr));
-  }, [w, h]);
+  }, [ready, sizeBorders]);
 
   // Where the camera is looking, updated a few times a second while moving; drives place labels.
   const [view, setView] = useState({ lat: HOME.lat, lng: HOME.lng, alt: 2.3 });
