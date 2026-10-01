@@ -157,10 +157,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 /* ---------- globe markers (HTML, constant size at any zoom) ---------- */
 /* globe.gl centres each marker element on its point; children are placed relative to that centre */
 .mk { position: relative; border: none; background: none; padding: 0; margin: 0; cursor: pointer; pointer-events: auto; transition: opacity 0.25s; display: block; }
-.mk-pinwrap { width: 22px; height: 30px; }
-.mk-pin { position: absolute; left: 0; top: -15px; width: 22px; height: 30px; display: block; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35)); }
-.mk-pin path { fill: var(--c); stroke: #fff; stroke-width: 1.6; }
-.mk-pin circle { fill: #fff; }
+.mk-flagwrap { width: 24px; height: 28px; }
+.mk-flag { position: absolute; left: 0; top: -12px; width: 24px; height: 28px; display: block; filter: drop-shadow(0 1.5px 2px rgba(0, 0, 0, 0.45)); }
+.mk-flag-cloth { fill: var(--c); stroke: rgba(255, 255, 255, 0.92); stroke-width: 0.9; stroke-linejoin: round; }
+.mk-flag-pole { stroke: #fff; stroke-width: 1.5; stroke-linecap: round; fill: none; }
+.mk-flag-foot { fill: var(--c); stroke: #fff; stroke-width: 1.2; }
+.mk-flagwrap:hover .mk-flag, .mk-flagwrap:focus-visible .mk-flag { filter: drop-shadow(0 1.5px 3px rgba(0, 0, 0, 0.5)) brightness(1.12); }
 .mk-stop { width: 24px; height: 24px; }
 .mk-num {
   position: absolute; inset: 0; border-radius: 50%; background: var(--route); color: #241a08; border: 2px solid #fff;
@@ -240,9 +242,12 @@ textarea.field { min-height: 130px; resize: vertical; line-height: 1.45; }
 .lb { pointer-events: none; white-space: nowrap; transform: translate(-50%, -50%); color: #fff; font-family: var(--font-body); transition: opacity 0.3s; text-shadow: 0 0 3px rgba(0, 0, 0, 0.85), 0 1px 2px rgba(0, 0, 0, 0.7); }
 .lb-country { font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255, 255, 255, 0.82); }
 .lb-country.lb-t1 { font-size: 12px; }
-.lb-city { font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
-.lb-city::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45); flex: none; }
-.lb-city.lb-t1 { font-size: 12.5px; }
+.lb-city { font-size: 10.5px; font-weight: 600; display: flex; align-items: center; gap: 3.5px; color: rgba(255, 255, 255, 0.92); }
+.lb-city::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1.3px rgba(0, 0, 0, 0.45); flex: none; }
+.lb-city.lb-t1 { font-size: 11.5px; color: #fff; }
+/* the long tail of small towns stays quiet so a zoomed-out view never turns into a wall of text */
+.lb-city.lb-t4, .lb-city.lb-t5 { font-size: 9.5px; color: rgba(255, 255, 255, 0.78); font-weight: 500; }
+.lb-city.lb-t4::before, .lb-city.lb-t5::before { width: 3px; height: 3px; }
 
 /* ---------- photos ---------- */
 .photo { position: relative; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--route) 30%, var(--paper)), color-mix(in srgb, var(--accent) 25%, var(--paper))); display: flex; align-items: center; justify-content: center; color: var(--ink-soft); font-family: var(--font-display); font-weight: 600; }

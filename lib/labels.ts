@@ -24,9 +24,12 @@ export const flag = (iso?: string) =>
   iso && /^[A-Z]{2}$/.test(iso) ? String.fromCodePoint(...[...iso].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)) : "";
 
 // Largest camera altitude (globe radii) at which each tier appears.
+// Cities used to need a lot of zoom before any name showed up, which left the globe
+// looking empty. The big ones now appear from almost as far out as countries; the
+// small ones still wait, so the view never turns into a wall of text.
 const SHOW = {
   country: { 1: 5, 2: 2.0, 3: 1.0 } as Record<number, number>,
-  city: { 1: 1.3, 2: 0.75, 3: 0.4, 4: 0.2, 5: 0.09 } as Record<number, number>,
+  city: { 1: 2.6, 2: 1.5, 3: 0.72, 4: 0.3, 5: 0.12 } as Record<number, number>,
 };
 // Draw order when labels compete for space.
 const PRIORITY = (l: PlaceLabel) => (l.kind === "country" ? [0, 0, 2, 5][l.tier] : [0, 1, 3, 4, 6, 7][l.tier]);

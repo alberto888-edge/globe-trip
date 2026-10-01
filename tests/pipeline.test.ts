@@ -146,9 +146,11 @@ test("geo helpers frame routes sensibly", () => {
 });
 
 test("labels: countries far away, cities appear as you zoom in, Spanish names", () => {
+  // From far out the globe shows countries plus, since Oct 2026, the handful of
+  // cities big enough to anchor the view. Smaller towns still have to wait.
   const far = visibleLabels({ lat: 30, lng: 10 }, 2.3);
   assert.ok(far.some((l) => l.kind === "country" && l.name === "Argelia"));
-  assert.ok(!far.some((l) => l.kind === "city"));
+  assert.ok(far.every((l) => l.kind === "country" || l.tier === 1), far.filter((l) => l.kind === "city").map((l) => `${l.name}:t${l.tier}`).join(","));
   const japan = visibleLabels({ lat: 35, lng: 137 }, 0.3).map((l) => l.name);
   assert.ok(japan.includes("Tokio") && japan.includes("Osaka"), japan.join(","));
   const close = visibleLabels({ lat: 34.85, lng: 135.7 }, 0.07).map((l) => l.name);

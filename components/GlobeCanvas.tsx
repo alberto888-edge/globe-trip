@@ -18,9 +18,11 @@ const WATER_GLSL = `
 {
   vec3 sc = pow(max(diffuseColor.rgb, vec3(0.0)), vec3(1.0 / 2.2));
   float lum = dot(sc, vec3(0.3, 0.59, 0.11));
-  float water = smoothstep(0.012, 0.05, sc.b - sc.r) * smoothstep(-0.03, 0.01, sc.b - sc.g) * (1.0 - smoothstep(0.3, 0.5, lum));
+  // Wide, gentle thresholds on purpose. JPEG tiles differ slightly from one another,
+  // and a sharp cutoff turned that difference into visible square seams across the sea.
+  float water = smoothstep(0.002, 0.095, sc.b - sc.r) * smoothstep(-0.055, 0.03, sc.b - sc.g) * (1.0 - smoothstep(0.26, 0.62, lum));
   vec3 lifted = mix(vec3(0.30, 0.56, 0.78), vec3(0.56, 0.80, 0.88), smoothstep(0.0, 0.3, lum)) + (sc - lum) * 0.5;
-  sc = mix(sc, clamp(lifted, 0.0, 1.0), water);
+  sc = mix(sc, clamp(lifted, 0.0, 1.0), water * 0.92);
   diffuseColor.rgb = pow(sc, vec3(2.2));
 }
 #endif
@@ -82,6 +84,31 @@ function useViewport() {
     return () => { window.removeEventListener("resize", read); window.visualViewport?.removeEventListener("resize", read); };
   }, []);
   return size;
+}
+
+// Satellite tiles arrive as plain textures with no anisotropic filtering, so anything
+// seen at an angle — which on a sphere is most of what you look at — turns to mush as
+// soon as you zoom in. The tile engine creates them itself, so we walk the scene and
+// upgrade whatever is new. Textures are tagged once so repeat passes cost nothing.
+const SHARPENED = Symbol("sharpened");
+function sharpenTextures(scene: THREE.Object3D, renderer: THREE.WebGLRenderer) {
+  const max = renderer.capabilities.getMaxAnisotropy();
+  if (max <= 1) return;
+  scene.traverse((o) => {
+    const mats = (o as THREE.Mesh).material;
+    if (!mats) return;
+    for (const m of Array.isArray(mats) ? mats : [mats]) {
+      const tex = (m as THREE.MeshBasicMaterial).map;
+      const t = tex as (THREE.Texture & { [SHARPENED]?: boolean }) | null;
+      if (!t || t[SHARPENED]) continue;
+      t[SHARPENED] = true;
+      t.anisotropy = max;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.generateMipmaps = true;
+      t.needsUpdate = true;
+    }
+  });
 }
 
 function cssColor(name: string, fallback: string) {
@@ -218,6 +245,7 @@ export default function GlobeCanvas(props: Props) {
     const g = globeRef.current;
     if (!g) return;
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    sharpenTextures(g.scene(), g.renderer());
     material.bumpScale = 7;
     const c = g.controls();
     c.enableDamping = true;
@@ -252,13 +280,29 @@ export default function GlobeCanvas(props: Props) {
 
   // Rotation feels the same at any zoom (slower close to the surface) and
   // route lines thin out as you get closer.
+  // New tiles keep arriving for a while after a camera move, so sweep for a few seconds
+  // after each one rather than only at the moment it stops.
+  const sharpenTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scheduleSharpen = useCallback(() => {
+    const g = globeRef.current;
+    if (!g || sharpenTimer.current) return;
+    let left = 8;
+    sharpenTimer.current = setInterval(() => {
+      const gg = globeRef.current;
+      if (gg) sharpenTextures(gg.scene(), gg.renderer());
+      if (--left <= 0 && sharpenTimer.current) { clearInterval(sharpenTimer.current); sharpenTimer.current = null; }
+    }, 450);
+  }, []);
+  useEffect(() => () => { if (sharpenTimer.current) clearInterval(sharpenTimer.current); }, []);
+
   const handleZoom = useCallback((pov: { lat: number; lng: number; altitude: number }) => {
     const c = globeRef.current?.controls();
     if (c) c.rotateSpeed = Math.min(0.6, 0.06 + pov.altitude * 0.22);
+    scheduleSharpen();
     const q = Math.round(Math.min(3, Math.max(0.05, pov.altitude)) * 20) / 20;
     setAlt((prev) => (prev === q ? prev : q));
     trackView(pov);
-  }, [trackView]);
+  }, [trackView, scheduleSharpen]);
 
   // Camera flights
   useEffect(() => {
@@ -308,8 +352,11 @@ export default function GlobeCanvas(props: Props) {
     for (const l of cand) {
       const p = g.getScreenCoords(l.lat, l.lng, 0.005);
       if (!p || !Number.isFinite(p.x)) continue;
-      const wPx = l.kind === "country" ? l.name.length * (l.tier === 1 ? 10 : 9) : l.name.length * 7 + 14;
-      const b = { x1: p.x - wPx / 2 - 5, x2: p.x + wPx / 2 + 5, y1: p.y - 11, y2: p.y + 11 };
+      // Rough text width, in step with the font sizes in globals.css: city names got
+      // smaller, so reserving the old width would waste screen and drop good labels.
+      const perChar = l.kind === "country" ? (l.tier === 1 ? 10 : 9) : l.tier === 1 ? 6.6 : l.tier >= 4 ? 5.4 : 6;
+      const wPx = l.name.length * perChar + (l.kind === "country" ? 0 : 8); // cities carry a dot and a gap
+      const b = { x1: p.x - wPx / 2 - 5, x2: p.x + wPx / 2 + 5, y1: p.y - 10, y2: p.y + 10 };
       if (b.x2 < 0 || b.x1 > w || p.y < TOPBAR + 24 || p.y > h - bottomInset) continue; // off screen, or under the header / bottom panel
       if (boxes.some((o) => o.x1 < b.x2 && b.x1 < o.x2 && o.y1 < b.y2 && b.y1 < o.y2)) continue;
       boxes.push(b);
@@ -350,7 +397,7 @@ export default function GlobeCanvas(props: Props) {
     // globe.gl centres this element on the point; children are offset from that centre.
     const el = document.createElement("button");
     el.type = "button";
-    el.className = `mk ${mk.kind === "stop" ? "mk-stop" : mk.kind === "dot" ? "mk-dot" : "mk-pinwrap"}`;
+    el.className = `mk ${mk.kind === "stop" ? "mk-stop" : mk.kind === "dot" ? "mk-dot" : "mk-flagwrap"}`;
     el.setAttribute("aria-label", mk.kind === "stop" ? `Parada ${mk.index + 1}: ${mk.name}` : mk.kind === "dot" ? `${mk.name} · ruta ${mk.tripName}` : mk.name);
     if (mk.kind === "dot") {
       el.style.setProperty("--c", mk.color);
@@ -358,7 +405,12 @@ export default function GlobeCanvas(props: Props) {
       if (mk.first) { const t = document.createElement("span"); t.className = "mk-trip"; t.textContent = mk.tripName; el.append(t); }
     } else if (mk.kind === "pin") {
       el.style.setProperty("--c", mk.type === "visitado" ? "var(--visited)" : "var(--wishlist)");
-      el.innerHTML = `<svg class="mk-pin" viewBox="0 0 22 30" aria-hidden="true"><path d="M11 1C5.5 1 1 5.4 1 10.8 1 18 11 29 11 29s10-11 10-18.2C21 5.4 16.5 1 11 1Z"/><circle cx="11" cy="10.8" r="3.6"/></svg>`;
+      // A small pennant on a pole. The pole's foot sits exactly on the coordinate, so
+      // the flag reads as planted there rather than floating over it.
+      el.innerHTML = `<svg class="mk-flag" viewBox="0 0 24 28" aria-hidden="true">` +
+        `<path class="mk-flag-cloth" d="M12.8 3.6 L22 7 L12.8 10.4 Z"/>` +
+        `<path class="mk-flag-pole" d="M12 2.8 V24.6"/>` +
+        `<circle class="mk-flag-foot" cx="12" cy="26" r="2.1"/></svg>`;
     } else {
       const num = document.createElement("span"); num.className = "mk-num"; num.textContent = String(mk.index + 1);
       const label = document.createElement("span");
