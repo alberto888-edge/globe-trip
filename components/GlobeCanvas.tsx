@@ -21,7 +21,11 @@ const WATER_GLSL = `
   // Wide, gentle thresholds on purpose. JPEG tiles differ slightly from one another,
   // and a sharp cutoff turned that difference into visible square seams across the sea.
   float water = smoothstep(0.002, 0.095, sc.b - sc.r) * smoothstep(-0.055, 0.03, sc.b - sc.g) * (1.0 - smoothstep(0.26, 0.62, lum));
-  vec3 lifted = mix(vec3(0.30, 0.56, 0.78), vec3(0.56, 0.80, 0.88), smoothstep(0.0, 0.3, lum)) + (sc - lum) * 0.5;
+  // The detail term is what carries the tile blocks across open sea, where Mapbox has
+  // little real resolution to give. Keep it near the coast (bright, shallow) and damp it
+  // over deep water, where it is only compression noise.
+  float deep = 1.0 - smoothstep(0.05, 0.22, lum);
+  vec3 lifted = mix(vec3(0.30, 0.56, 0.78), vec3(0.56, 0.80, 0.88), smoothstep(0.0, 0.3, lum)) + (sc - lum) * mix(0.5, 0.12, deep);
   sc = mix(sc, clamp(lifted, 0.0, 1.0), water * 0.92);
   diffuseColor.rgb = pow(sc, vec3(2.2));
 }
@@ -90,6 +94,25 @@ function useViewport() {
 // seen at an angle — which on a sphere is most of what you look at — turns to mush as
 // soon as you zoom in. The tile engine creates them itself, so we walk the scene and
 // upgrade whatever is new. Textures are tagged once so repeat passes cost nothing.
+// three-slippy-map-globe picks the tile zoom level from a fixed ladder: it only steps up
+// a level when the camera gets twice as close, starting at 8 globe radii. That ladder is
+// two levels too conservative for a phone screen — at the distance you actually look at a
+// country from, it is still serving continent-sized tiles, which is the blur you see.
+// Shifting the ladder by two levels asks for four times the linear detail at every
+// distance. Nothing else about the engine changes.
+const TILE_LEVEL_BOOST = 2;
+function sharpenTileLevels(scene: THREE.Object3D) {
+  let done = false;
+  scene.traverse((o) => {
+    const e = o as unknown as { thresholds?: number[]; maxLevel?: number; __boosted?: boolean };
+    if (done || e.__boosted || !Array.isArray(e.thresholds) || typeof e.maxLevel !== "number") return;
+    e.__boosted = true;
+    e.thresholds = e.thresholds.map((t) => t * Math.pow(2, TILE_LEVEL_BOOST));
+    done = true;
+  });
+  return done;
+}
+
 const SHARPENED = Symbol("sharpened");
 function sharpenTextures(scene: THREE.Object3D, renderer: THREE.WebGLRenderer) {
   const max = renderer.capabilities.getMaxAnisotropy();
@@ -246,6 +269,7 @@ export default function GlobeCanvas(props: Props) {
     if (!g) return;
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     sharpenTextures(g.scene(), g.renderer());
+    sharpenTileLevels(g.scene());
     material.bumpScale = 7;
     const c = g.controls();
     c.enableDamping = true;
@@ -289,7 +313,7 @@ export default function GlobeCanvas(props: Props) {
     let left = 8;
     sharpenTimer.current = setInterval(() => {
       const gg = globeRef.current;
-      if (gg) sharpenTextures(gg.scene(), gg.renderer());
+      if (gg) { sharpenTileLevels(gg.scene()); sharpenTextures(gg.scene(), gg.renderer()); }
       if (--left <= 0 && sharpenTimer.current) { clearInterval(sharpenTimer.current); sharpenTimer.current = null; }
     }, 450);
   }, []);
