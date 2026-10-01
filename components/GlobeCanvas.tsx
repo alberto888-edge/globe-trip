@@ -146,6 +146,15 @@ const CUSTOM_TILES = process.env.NEXT_PUBLIC_SATELLITE_TILES || "";
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const HAS_TILES = Boolean(CUSTOM_TILES || MAPBOX_TOKEN);
 
+// Every imagery provider requires its credit on screen. Esri's terms ask for "Powered by
+// Esri" plus the imagery sources; any other custom source can name its own.
+const ATTRIBUTION = CUSTOM_TILES
+  ? process.env.NEXT_PUBLIC_SATELLITE_ATTRIBUTION ||
+    (CUSTOM_TILES.includes("arcgis.com") ? "Powered by Esri · Esri, Maxar, Earthstar Geographics, GIS User Community" : "")
+  : MAPBOX_TOKEN
+    ? "© Mapbox © Maxar © OpenStreetMap"
+    : "";
+
 // One format at every level. Asking Mapbox for cheaper JPEG on wide views (jpg70/jpg80)
 // looked like free bytes, but those tiles never arrived: wide views came back almost
 // black while close views — the only ones still on jpg90 — were fine.
@@ -662,9 +671,7 @@ export default function GlobeCanvas(props: Props) {
   const tilesOn = tiles === "on";
   return (
     <>
-    {tilesOn && MAPBOX_TOKEN && !CUSTOM_TILES && (
-      <div className="attribution">© Mapbox © Maxar © OpenStreetMap</div>
-    )}
+    {tilesOn && ATTRIBUTION && <div className="attribution">{ATTRIBUTION}</div>}
     <Globe
       ref={globeRef}
       width={w}
