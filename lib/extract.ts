@@ -11,7 +11,11 @@ export class ExtractError extends Error {
   constructor(public code: "no_places" | "not_configured" | "upstream", message: string) { super(message); }
 }
 
+// Reading on-screen text off video frames is the one job that needs the good model:
+// it is the whole differentiator of the app. Trip plans and activity suggestions are
+// ordinary text work, so they run on the cheap model.
 const MODEL = () => process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+const FAST_MODEL = () => process.env.ANTHROPIC_MODEL_FAST || "claude-haiku-4-5-20251001";
 
 function client() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -20,12 +24,15 @@ function client() {
 }
 
 /** One forced tool call; returns the tool input. */
-async function callTool(system: string, content: Anthropic.MessageParam["content"], tool: Anthropic.Tool, maxTokens = 3000): Promise<unknown> {
+async function callTool(system: string, content: Anthropic.MessageParam["content"], tool: Anthropic.Tool, maxTokens = 3000, model = MODEL()): Promise<unknown> {
   const c = client();
   try {
     const msg = await c.messages.create({
-      model: MODEL(),
+      model,
       max_tokens: maxTokens,
+      // Extraction is a reading task, not a creative one. Without this the same video
+      // can yield different places on each run, which is exactly the flakiness we saw.
+      temperature: 0,
       system,
       tools: [tool],
       tool_choice: { type: "tool", name: tool.name },
@@ -294,7 +301,7 @@ export function toPlanRoute(input: unknown, req: PlanRequest): Route {
 }
 
 export async function planTrip(req: PlanRequest): Promise<Route> {
-  return toPlanRoute(await callTool(PLAN_SYSTEM, buildPlanPrompt(req), PLAN_TOOL, 4000), req);
+  return toPlanRoute(await callTool(PLAN_SYSTEM, buildPlanPrompt(req), PLAN_TOOL, 4000, FAST_MODEL()), req);
 }
 
 // ---------------------------------------------------------------- things to do at each stop
@@ -390,7 +397,7 @@ export function toActivities(input: unknown, count: number): Activity[][] {
 }
 
 export async function suggestActivities(req: ActivitiesRequest): Promise<Activity[][]> {
-  return toActivities(await callTool(ACTIVITIES_SYSTEM, buildActivitiesPrompt(req), ACTIVITIES_TOOL, 4000), req.stops.length);
+  return toActivities(await callTool(ACTIVITIES_SYSTEM, buildActivitiesPrompt(req), ACTIVITIES_TOOL, 4000, FAST_MODEL()), req.stops.length);
 }
 
 // ---------------------------------------------------------------- optional coordinate refinement

@@ -32,7 +32,12 @@ export function frameTimes(duration: number, count: number): number[] {
 
 export interface Frame { at: number; jpeg: Buffer }
 
-/** Extracts `count` frames, 512 px wide JPEG, from an in-memory video. */
+// 768 px at q:v 3 rather than 512 px at q:v 6. Travel videos carry their place names
+// as small on-screen captions; at the old size and quality they blurred into noise.
+export const FRAME_WIDTH = 768;
+export const FRAME_QUALITY = "3";
+
+/** Extracts `count` frames, 768 px wide JPEG, from an in-memory video. */
 export async function framesFromVideo(video: Buffer, count = 8, knownDuration?: number): Promise<Frame[]> {
   const dir = await mkdtemp(join(tmpdir(), "gt-"));
   try {
@@ -50,7 +55,7 @@ export async function framesFromVideo(video: Buffer, count = 8, knownDuration?: 
     for (let i = 0; i < times.length; i += 3) {
       const batch = times.slice(i, i + 3).map(async (t, j) => {
         const out = join(dir, `f${i + j}.jpg`);
-        await run(["-hide_banner", "-loglevel", "error", "-ss", String(t), "-i", input, "-frames:v", "1", "-vf", "scale=512:-2", "-q:v", "6", "-y", out]);
+        await run(["-hide_banner", "-loglevel", "error", "-ss", String(t), "-i", input, "-frames:v", "1", "-vf", `scale=${FRAME_WIDTH}:-2`, "-q:v", FRAME_QUALITY, "-y", out]);
         return { at: t, jpeg: await readFile(out) };
       });
       for (const r of await Promise.allSettled(batch)) if (r.status === "fulfilled" && r.value.jpeg.length > 500) frames.push(r.value);
@@ -61,13 +66,13 @@ export async function framesFromVideo(video: Buffer, count = 8, knownDuration?: 
   }
 }
 
-/** Re-encodes any image (webp, heic, huge jpeg) to a 512 px JPEG. */
+/** Re-encodes any image (webp, heic, huge jpeg) to a 768 px JPEG. */
 export async function normalizeImage(img: Buffer): Promise<Buffer | null> {
   const dir = await mkdtemp(join(tmpdir(), "gt-"));
   try {
     const input = join(dir, "in.img"), out = join(dir, "out.jpg");
     await writeFile(input, img);
-    await run(["-hide_banner", "-loglevel", "error", "-i", input, "-frames:v", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "6", "-y", out]);
+    await run(["-hide_banner", "-loglevel", "error", "-i", input, "-frames:v", "1", "-vf", `scale='min(${FRAME_WIDTH},iw)':-2`, "-q:v", FRAME_QUALITY, "-y", out]);
     return await readFile(out);
   } catch {
     return null;
