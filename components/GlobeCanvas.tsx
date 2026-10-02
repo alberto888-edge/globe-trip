@@ -12,6 +12,7 @@ import type { Pin, Route } from "@/lib/types";
 import { altitudeForSpread, distanceKm, wholeGlobeAltitude } from "@/lib/geo";
 import { loadMorePlaces, visibleLabels, type PlaceLabel } from "@/lib/labels";
 import { MAX_TILE_LEVEL, tileThresholds } from "@/lib/tiles";
+import { currentLang } from "@/lib/lang";
 
 // ---------------------------------------------------------------- the ocean
 //
@@ -606,7 +607,8 @@ export default function GlobeCanvas(props: Props) {
     const el = document.createElement("button");
     el.type = "button";
     el.className = `mk ${mk.kind === "stop" ? "mk-stop" : mk.kind === "dot" ? "mk-dot" : "mk-flagwrap"}`;
-    el.setAttribute("aria-label", mk.kind === "stop" ? `Parada ${mk.index + 1}: ${mk.name}` : mk.kind === "dot" ? `${mk.name} · ruta ${mk.tripName}` : mk.name);
+    const es = currentLang() === "es";
+    el.setAttribute("aria-label", mk.kind === "stop" ? `${es ? "Parada" : "Stop"} ${mk.index + 1}: ${mk.name}` : mk.kind === "dot" ? `${mk.name} · ${es ? "ruta" : "route"} ${mk.tripName}` : mk.name);
     if (mk.kind === "dot") {
       el.style.setProperty("--c", mk.color);
       // the trip's name, once, next to where it starts

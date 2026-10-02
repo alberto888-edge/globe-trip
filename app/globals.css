@@ -84,6 +84,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .topbar-right { display: flex; align-items: center; gap: 10px; }
 .stats { display: flex; gap: 10px; align-items: center; border-radius: 20px; padding: 8px 12px; font-size: 12px; }
 .stats b { font-weight: 600; }
+.lang { border: 0; border-radius: 20px; padding: 8px 11px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: inherit; cursor: pointer; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
 .iconbtn {
   width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
@@ -491,6 +492,7 @@ textarea.field { min-height: 130px; resize: vertical; line-height: 1.45; }
 .legal { max-width: 46rem; margin: 0 auto; padding: 28px 20px 56px; color: var(--ink); }
 .legal-back { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); text-decoration: none; margin-bottom: 22px; }
 .legal-back:hover { color: var(--ink); }
+.legal-other { float: right; font-size: 12.5px; font-weight: 600; color: var(--accent); text-decoration: none; margin-top: 1px; }
 .legal h1 { font-family: var(--font-display, inherit); font-size: 30px; line-height: 1.15; margin: 0 0 14px; }
 .legal h2 { font-size: 16px; margin: 30px 0 8px; letter-spacing: -0.01em; }
 .legal p, .legal li, .legal td, .legal dd { font-size: 14.5px; line-height: 1.6; }

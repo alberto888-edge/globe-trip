@@ -17,4 +17,5 @@ export const SITE = {
   url: "https://globe-trip-tau.vercel.app",
 };
 
-export const LAST_UPDATED = "1 de octubre de 2026";
+export const LAST_UPDATED = "2 de octubre de 2026";
+export const LAST_UPDATED_EN = "2 October 2026";

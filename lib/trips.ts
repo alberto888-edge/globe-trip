@@ -3,6 +3,8 @@
 // Budgets: rough per-person estimates, mid level, flights from Madrid, mid season.
 import type { Route, Stop, TripRisk } from "./types";
 import { withDayRanges } from "./itinerary";
+import { currentLang } from "./lang";
+import { TRIPS_EN } from "./trips.en";
 
 interface ReadyTrip {
   id: string;
@@ -21,7 +23,7 @@ interface ReadyTrip {
 const S = (name: string, country: string, lat: number, lng: number, days: number, sub: string, note: string, wiki?: string): Omit<Stop, "when"> =>
   ({ name, country, lat, lng, days, sub, note, wiki });
 
-const TRIPS: ReadyTrip[] = [
+const TRIPS_ES: ReadyTrip[] = [
   {
     id: "indochina", name: "Vietnam, Camboya y Tailandia", tag: "El gran clásico del Sudeste Asiático", cover: "Bahía de Ha Long",
     countries: ["VN", "KH", "TH"], destination: "Vietnam, Camboya y Tailandia",
@@ -181,6 +183,22 @@ const TRIPS: ReadyTrip[] = [
   },
 ];
 
+/** The same trips with their English text, when the app is in English. */
+function inEnglish(t: ReadyTrip): ReadyTrip {
+  const e = TRIPS_EN[t.id];
+  if (!e) return t;
+  return {
+    ...t, name: e.name, tag: e.tag, destination: e.destination, summary: e.summary,
+    stops: t.stops.map((s, i) => (e.stops[i] ? { ...s, name: e.stops[i][0], country: e.stops[i][1], sub: e.stops[i][2], note: e.stops[i][3] } : s)),
+    budget: t.budget.map(([label, n], i) => [e.budget[i] || label, n]),
+    tips: e.tips,
+    risks: { ...t.risks, summary: e.risks.summary, points: e.risks.points },
+  };
+}
+
+const EN = currentLang() === "en";
+const TRIPS: ReadyTrip[] = EN ? TRIPS_ES.map(inEnglish) : TRIPS_ES;
+
 /** The card list for the planner. */
 export const READY_TRIPS = TRIPS.map((t) => ({
   id: t.id, name: t.name, tag: t.tag, cover: t.cover, countries: t.countries,
@@ -206,7 +224,7 @@ export function readyRoute(id: string, travelers = 1): Route | null {
       total: perPerson * travelers,
       perPerson,
       breakdown: t.budget.map(([label, amount]) => ({ label, amount: amount * travelers })),
-      note: "Estimación por persona, nivel medio, vuelos desde Madrid en temporada media.",
+      note: EN ? "Per-person estimate, mid-range, flights from Madrid in mid season." : "Estimación por persona, nivel medio, vuelos desde Madrid en temporada media.",
     },
     tips: t.tips,
     risks: { ...t.risks, countries: [...new Set(t.stops.map((s) => s.country!))] },

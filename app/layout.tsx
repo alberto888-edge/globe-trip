@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Globe Trip",
-  description: "Convierte vídeos de viajes de TikTok e Instagram en rutas sobre un globo 3D.",
+  description: "Turn TikTok and Instagram travel videos into routes on a 3D globe. · Convierte vídeos de viajes de TikTok e Instagram en rutas sobre un globo 3D.",
   applicationName: "Globe Trip",
   appleWebApp: { capable: true, title: "Globe Trip", statusBarStyle: "default" },
   icons: { apple: "/icons/apple-touch-icon.png" },

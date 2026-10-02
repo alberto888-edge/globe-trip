@@ -142,12 +142,14 @@ export interface PlanRequest {
   budgetAmount?: number;
   origin?: string;
   travelers: number;
+  lang?: "es" | "en";
 }
 
 export interface ActivitiesRequest {
   stops: { name: string; country?: string; days?: number; must?: string[] }[];
   styles?: string[];
   level?: TravelerLevel;
+  lang?: "es" | "en";
 }
 export type ActivitiesResponse = { ok: true; activities: Activity[][] } | { ok: false; code: AnalyzeErrorCode; message: string };
 

@@ -1,3 +1,4 @@
+import "./lang-es.ts"; // the Spanish app: these tests check Spanish names and texts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectPlatform, parseTikTokPage, parseInstagramPage, parseTikwm, vttToText } from "../lib/video.ts";

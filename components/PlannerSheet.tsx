@@ -7,51 +7,58 @@ import { READY_TRIPS } from "@/lib/trips";
 import PlacePhoto from "./PlacePhoto";
 import PlaceSearch, { FitNotice, fitMessage, placeText, Suggestion, type FitMsg } from "./PlaceSearch";
 import Sheet from "./Sheet";
+import { currentLang, locale, useLang, useT } from "@/lib/i18n";
+
+// [Spanish, English] pairs. The label in the person's language is what the planner receives.
+const EN = currentLang() === "en";
+const L = (es: string, en: string) => (EN ? en : es);
 
 const DESTINATIONS: { name: string; wiki: string; tag: string; iso: string }[] = [
-  { name: "Japón", wiki: "Fushimi Inari-taisha", tag: "Templos y neón", iso: "JP" },
-  { name: "Italia", wiki: "Cinque Terre", tag: "Arte y pasta", iso: "IT" },
-  { name: "Tailandia", wiki: "Railay", tag: "Playas e islas", iso: "TH" },
-  { name: "Marruecos", wiki: "Chefchaouen", tag: "Medinas y desierto", iso: "MA" },
-  { name: "Perú", wiki: "Machu Picchu", tag: "Andes e incas", iso: "PE" },
-  { name: "Islandia", wiki: "Skógafoss", tag: "Glaciares y auroras", iso: "IS" },
-  { name: "México", wiki: "Chichén Itzá", tag: "Cenotes y tacos", iso: "MX" },
-  { name: "Grecia", wiki: "Santorini", tag: "Islas blancas", iso: "GR" },
-  { name: "Portugal", wiki: "Lisboa", tag: "Costa y fado", iso: "PT" },
-  { name: "Indonesia", wiki: "Bali", tag: "Bali y volcanes", iso: "ID" },
-  { name: "Noruega", wiki: "Geirangerfjord", tag: "Fiordos", iso: "NO" },
-  { name: "Estados Unidos", wiki: "Nueva York", tag: "Costa a costa", iso: "US" },
+  { name: L("Japón", "Japan"), wiki: "Fushimi Inari-taisha", tag: L("Templos y neón", "Temples and neon"), iso: "JP" },
+  { name: L("Italia", "Italy"), wiki: "Cinque Terre", tag: L("Arte y pasta", "Art and pasta"), iso: "IT" },
+  { name: L("Tailandia", "Thailand"), wiki: "Railay", tag: L("Playas e islas", "Beaches and islands"), iso: "TH" },
+  { name: L("Marruecos", "Morocco"), wiki: "Chefchaouen", tag: L("Medinas y desierto", "Medinas and desert"), iso: "MA" },
+  { name: L("Perú", "Peru"), wiki: "Machu Picchu", tag: L("Andes e incas", "Andes and Incas"), iso: "PE" },
+  { name: L("Islandia", "Iceland"), wiki: "Skógafoss", tag: L("Glaciares y auroras", "Glaciers and auroras"), iso: "IS" },
+  { name: L("México", "Mexico"), wiki: "Chichén Itzá", tag: L("Cenotes y tacos", "Cenotes and tacos"), iso: "MX" },
+  { name: L("Grecia", "Greece"), wiki: "Santorini", tag: L("Islas blancas", "White islands"), iso: "GR" },
+  { name: "Portugal", wiki: "Lisboa", tag: L("Costa y fado", "Coast and fado"), iso: "PT" },
+  { name: "Indonesia", wiki: "Bali", tag: L("Bali y volcanes", "Bali and volcanoes"), iso: "ID" },
+  { name: L("Noruega", "Norway"), wiki: "Geirangerfjord", tag: L("Fiordos", "Fjords"), iso: "NO" },
+  { name: L("Estados Unidos", "United States"), wiki: "Nueva York", tag: L("Costa a costa", "Coast to coast"), iso: "US" },
 ];
 
 const THEMES = [
-  "Playas paradisíacas", "Montaña y naturaleza", "Ciudades con encanto", "Gastronomía",
-  "Aventura", "Escapada romántica", "Cultura e historia", "Mochilero low-cost",
+  L("Playas paradisíacas", "Dream beaches"), L("Montaña y naturaleza", "Mountains and nature"), L("Ciudades con encanto", "Charming cities"), L("Gastronomía", "Food"),
+  L("Aventura", "Adventure"), L("Escapada romántica", "Romantic getaway"), L("Cultura e historia", "Culture and history"), L("Mochilero low-cost", "Backpacking on a budget"),
 ];
 
-const STYLES = ["Lo imprescindible", "Explorador", "Histórico y cultural", "Playero", "Naturaleza y aventura", "Gastronómico", "Relax", "Fiesta y noche"];
+const STYLES = [L("Lo imprescindible", "The essentials"), L("Explorador", "Explorer"), L("Histórico y cultural", "History and culture"), L("Playero", "Beaches"),
+  L("Naturaleza y aventura", "Nature and adventure"), L("Gastronómico", "Food lover"), L("Relax", "Slow and relaxed"), L("Fiesta y noche", "Nightlife")];
 
 const TRAVELER: { id: TravelerLevel; label: string; hint: string }[] = [
-  { id: "primera", label: "Primera vez", hint: "Lo más típico, sin prisas" },
-  { id: "intermedio", label: "Intermedio", hint: "Clásicos y algo menos visto" },
-  { id: "experto", label: "Experto", hint: "Fuera de las rutas típicas" },
+  { id: "primera", label: L("Primera vez", "First time"), hint: L("Lo más típico, sin prisas", "The classics, no rush") },
+  { id: "intermedio", label: L("Intermedio", "Some experience"), hint: L("Clásicos y algo menos visto", "Classics and some lesser-known") },
+  { id: "experto", label: L("Experto", "Seasoned"), hint: L("Fuera de las rutas típicas", "Off the beaten track") },
 ];
 
 const LEVELS: { id: BudgetLevel; label: string; hint: string }[] = [
-  { id: "mochilero", label: "Mochilero", hint: "Hostales y transporte público" },
-  { id: "medio", label: "Medio", hint: "Hoteles 3★ y algún tour" },
-  { id: "alto", label: "Alto", hint: "Hoteles 4-5★ y experiencias" },
+  { id: "mochilero", label: L("Mochilero", "Backpacker"), hint: L("Hostales y transporte público", "Hostels and public transport") },
+  { id: "medio", label: L("Medio", "Mid-range"), hint: L("Hoteles 3★ y algún tour", "3★ hotels and a few tours") },
+  { id: "alto", label: L("Alto", "Comfort"), hint: L("Hoteles 4-5★ y experiencias", "4-5★ hotels and experiences") },
 ];
 
-const eur = (n: number) => n.toLocaleString("es-ES", { maximumFractionDigits: 0 });
+const eur = (n: number) => n.toLocaleString(locale(currentLang()), { maximumFractionDigits: 0 });
 
 function Stepper({ id, label, value, min, max, onChange, unit }: { id: string; label: string; value: number; min: number; max: number; unit: string; onChange: (v: number) => void }) {
+  const t = useT();
   return (
     <div className="stepper" role="group" aria-labelledby={id}>
       <span id={id} className="stepper-label">{label}</span>
       <div className="stepper-ctl">
-        <button type="button" aria-label={`Menos ${unit}`} disabled={value <= min} onClick={() => onChange(value - 1)}>−</button>
+        <button type="button" aria-label={`${t("Menos", "Fewer")} ${unit}`} disabled={value <= min} onClick={() => onChange(value - 1)}>−</button>
         <b>{value}<small> {unit}</small></b>
-        <button type="button" aria-label={`Más ${unit}`} disabled={value >= max} onClick={() => onChange(value + 1)}>+</button>
+        <button type="button" aria-label={`${t("Más", "More")} ${unit}`} disabled={value >= max} onClick={() => onChange(value + 1)}>+</button>
       </div>
     </div>
   );
@@ -69,6 +76,8 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   onReady: (id: string, travelers: number) => void;
   onClose: () => void;
 }) {
+  const t = useT();
+  const lang = useLang();
   const [step, setStep] = useState<1 | 2>(init?.destination ? 2 : 1);
   const [query, setQuery] = useState("");
   const [destination, setDestination] = useState(init?.destination || "");
@@ -81,9 +90,9 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   const [travelers, setTravelers] = useState(2);
   const [budget, setBudget] = useState<BudgetLevel>("medio");
   const [amount, setAmount] = useState("");
-  const [origin, setOrigin] = useState("Madrid");
+  const [origin, setOrigin] = useState(lang === "es" ? "Madrid" : "");
   const [destPlace, setDestPlace] = useState<PlaceLabel | undefined>(() => (init?.destination ? resolvePlace(init.destination) : undefined));
-  const [must, setMust] = useState<Must[]>(() => (init?.mustSee || []).map((t) => { const p = resolvePlace(t); return p ? mustFrom(p) : { name: t, text: t }; }));
+  const [must, setMust] = useState<Must[]>(() => (init?.mustSee || []).map((x) => { const p = resolvePlace(x); return p ? mustFrom(p) : { name: x, text: x }; }));
   const [countries, setCountries] = useState<string[]>(() => (init?.countries || []).map((c) => countryByName(c)?.iso).filter(Boolean) as string[]);
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<FitMsg | null>(null);
@@ -93,7 +102,7 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   const [typed, setTyped] = useState("");
   const [moreLoaded, setMoreLoaded] = useState(false);
   useEffect(() => { loadMorePlaces().then(() => setMoreLoaded(true)); }, []);
-  useEffect(() => { const t = setTimeout(() => setTyped(query), 180); return () => clearTimeout(t); }, [query]);
+  useEffect(() => { const h = setTimeout(() => setTyped(query), 180); return () => clearTimeout(h); }, [query]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const suggestions = useMemo(() => searchPlaces(typed, 6), [typed, moreLoaded]);
 
@@ -116,8 +125,8 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
   /** Adds a must-see place, unless it's another trip altogether (then it asks first). */
   const addMust = (p: PlaceLabel, force = false) => {
     setAdding(false);
-    if (must.some((m) => m.text === placeText(p))) { setNotice({ tone: "info", text: `${p.name} ya está en tu ruta.` }); return; }
-    let km = 0, from = destination.split(",")[0].trim() || "tu destino";
+    if (must.some((m) => m.text === placeText(p))) { setNotice({ tone: "info", text: t(`${p.name} ya está en tu ruta.`, `${p.name} is already in your route.`) }); return; }
+    let km = 0, from = destination.split(",")[0].trim() || t("tu destino", "your destination");
     if (destPlace && p.iso !== destPlace.iso) km = kmToCountry(destPlace.iso, p);
     else if (!destPlace && must.some((m) => m.lat !== undefined)) km = Infinity;
     for (const m of must) {
@@ -127,38 +136,38 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
     }
     if (!Number.isFinite(km)) km = 0;
     const fit = fitFor(km);
-    if (fit === "tooFar" && !force) { setNotice({ ...fitMessage(fit, p.name, km, from)!, place: p }); return; }
+    if (fit === "tooFar" && !force) { setNotice({ ...fitMessage(fit, p.name, km, from, t)!, place: p }); return; }
     setMust((l) => [...l, mustFrom(p)]);
     const other = destIso && p.iso !== destIso && countryByIso(p.iso) ? p.iso : null;
     if (other) { setMulti(true); setCountries((l) => (l.includes(other) ? l : [...l, other])); }
-    const far = fitMessage(fit, p.name, km, from);
-    setNotice(far && fit === "far" ? far : other ? { tone: "info", text: `${flag(other)} ${countryName(other)} se suma a los países del viaje.` } : null);
+    const far = fitMessage(fit, p.name, km, from, t);
+    setNotice(far && fit === "far" ? far : other ? { tone: "info", text: t(`${flag(other)} ${countryName(other)} se suma a los países del viaje.`, `${flag(other)} ${countryName(other)} joins the trip's countries.`) } : null);
   };
   const toggleStyle = (s: string) => setStyles((l) => (l.includes(s) ? l.filter((x) => x !== s) : [...l, s]));
 
-  const label = [destination.trim(), theme].filter(Boolean).join(" · ") || "Tu viaje";
+  const label = [destination.trim(), theme].filter(Boolean).join(" · ") || t("Tu viaje", "Your trip");
   const canNext = query.trim().length > 1 || !!theme;
 
   return (
-    <Sheet label="Crea tu viaje" onClose={onClose}>
-      <span className="eyebrow">CREA TU VIAJE · PASO {step} DE 2</span>
+    <Sheet label={t("Crea tu viaje", "Plan a trip")} onClose={onClose}>
+      <span className="eyebrow">{t(`CREA TU VIAJE · PASO ${step} DE 2`, `PLAN A TRIP · STEP ${step} OF 2`)}</span>
       {step === 1 ? (
         <>
-          <h2>¿A dónde te apetece ir?</h2>
+          <h2>{t("¿A dónde te apetece ir?", "Where do you fancy going?")}</h2>
           <div className="suggest">
-            <label htmlFor="dest" className="sr">Destino</label>
+            <label htmlFor="dest" className="sr">{t("Destino", "Destination")}</label>
             <input id="dest" className="field" type="search" maxLength={120} autoComplete="off" enterKeyHint="next"
-              placeholder="Busca un país, ciudad o lugar…" value={query}
+              placeholder={t("Busca un país, ciudad o lugar…", "Search a country, city or place…")} value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && query.trim().length > 1) { if (suggestions[0]) pick(placeText(suggestions[0]), suggestions[0]); else pick(query.trim()); } }} />
             {query.trim().length > 1 && (
-              <div className="suggest-list" role="listbox" aria-label="Sugerencias">
+              <div className="suggest-list" role="listbox" aria-label={t("Sugerencias", "Suggestions")}>
                 {suggestions.map((p) => (
                   <Suggestion key={p.id} p={p} onPick={() => pick(placeText(p), p)} />
                 ))}
                 <button type="button" className="suggest-row suggest-free" onClick={() => pick(query.trim())}>
                   <span className="suggest-flag" aria-hidden="true">✨</span>
-                  <span className="suggest-text"><b>«{query.trim()}»</b><span>Usar lo que he escrito</span></span>
+                  <span className="suggest-text"><b>«{query.trim()}»</b><span>{t("Usar lo que he escrito", "Use what I typed")}</span></span>
                 </button>
               </div>
             )}
@@ -166,22 +175,22 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
 
           {!query && (
             <>
-              <span className="eyebrow">VIAJES LISTOS · SIN ESPERAR</span>
+              <span className="eyebrow">{t("VIAJES LISTOS · SIN ESPERAR", "READY-MADE TRIPS · NO WAITING")}</span>
               <div className="ready-row">
-                {READY_TRIPS.map((t) => (
-                  <button key={t.id} type="button" className="ready" onClick={() => onReady(t.id, travelers)}>
-                    <PlacePhoto className="ready-photo" q={{ name: t.cover, wiki: t.cover }} alt={t.name} />
-                    <span className="ready-flags" aria-hidden="true">{t.countries.map(flag).join(" ")}</span>
+                {READY_TRIPS.map((rt) => (
+                  <button key={rt.id} type="button" className="ready" onClick={() => onReady(rt.id, travelers)}>
+                    <PlacePhoto className="ready-photo" q={{ name: rt.cover, wiki: rt.cover }} alt={rt.name} />
+                    <span className="ready-flags" aria-hidden="true">{rt.countries.map(flag).join(" ")}</span>
                     <span className="ready-text">
-                      <b>{t.name}</b>
-                      <span>{t.tag}</span>
-                      <em>{t.days} DÍAS · DESDE {eur(t.perPerson)} €/PERS.</em>
+                      <b>{rt.name}</b>
+                      <span>{rt.tag}</span>
+                      <em>{t(`${rt.days} DÍAS · DESDE ${eur(rt.perPerson)} €/PERS.`, `${rt.days} DAYS · FROM ${eur(rt.perPerson)} €/PERSON`)}</em>
                     </span>
                   </button>
                 ))}
               </div>
 
-              <span className="eyebrow">DESTINOS POPULARES</span>
+              <span className="eyebrow">{t("DESTINOS POPULARES", "POPULAR DESTINATIONS")}</span>
               <div className="dest-grid">
                 {DESTINATIONS.map((d) => (
                   <button key={d.name} type="button" className="dest" onClick={() => pick(d.name, countryByIso(d.iso))}>
@@ -191,54 +200,54 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
                 ))}
               </div>
 
-              <span className="eyebrow" style={{ marginTop: 4 }}>¿SIN DESTINO? ELIGE UN ESTILO Y TE PROPONEMOS UNO</span>
+              <span className="eyebrow" style={{ marginTop: 4 }}>{t("¿SIN DESTINO? ELIGE UN ESTILO Y TE PROPONEMOS UNO", "NO DESTINATION? PICK A STYLE AND WE'LL SUGGEST ONE")}</span>
               <div className="theme-row">
-                {THEMES.map((t) => (
-                  <button key={t} type="button" className="theme" aria-pressed={theme === t} onClick={() => setTheme(theme === t ? null : t)}>{t}</button>
+                {THEMES.map((th) => (
+                  <button key={th} type="button" className="theme" aria-pressed={theme === th} onClick={() => setTheme(theme === th ? null : th)}>{th}</button>
                 ))}
               </div>
             </>
           )}
           <div className="actions">
-            <button className="btn btn-ghost" type="button" onClick={onClose}>Cancelar</button>
+            <button className="btn btn-ghost" type="button" onClick={onClose}>{t("Cancelar", "Cancel")}</button>
             <button className="btn btn-solid" type="button" disabled={!canNext}
-              onClick={() => { if (query.trim().length > 1) pick(query.trim()); else { setDestination(""); setStep(2); } }}>Siguiente</button>
+              onClick={() => { if (query.trim().length > 1) pick(query.trim()); else { setDestination(""); setStep(2); } }}>{t("Siguiente", "Next")}</button>
           </div>
         </>
       ) : (
         <>
           <div className="plan-head">
             <h2>{label}</h2>
-            <button className="link" type="button" onClick={() => setStep(1)}>Cambiar</button>
+            <button className="link" type="button" onClick={() => setStep(1)}>{t("Cambiar", "Change")}</button>
           </div>
           {init?.context && <p className="note">{init.context}</p>}
 
-          <span className="eyebrow">DESTINOS QUE QUIERES SÍ O SÍ · OPCIONAL</span>
+          <span className="eyebrow">{t("DESTINOS QUE QUIERES SÍ O SÍ · OPCIONAL", "PLACES YOU MUST SEE · OPTIONAL")}</span>
           <div className="must">
             {must.map((m) => (
               <span key={m.text} className="must-chip">
                 <i aria-hidden="true">{flag(m.iso) || "📍"}</i>{m.name}
-                <button type="button" aria-label={`Quitar ${m.name}`} onClick={() => setMust((l) => l.filter((x) => x !== m))}>×</button>
+                <button type="button" aria-label={`${t("Quitar", "Remove")} ${m.name}`} onClick={() => setMust((l) => l.filter((x) => x !== m))}>×</button>
               </span>
             ))}
             {!adding && must.length < 6 && (
-              <button type="button" className="must-add" onClick={() => { setAdding(true); setNotice(null); }}>+ Añadir destino a la ruta</button>
+              <button type="button" className="must-add" onClick={() => { setAdding(true); setNotice(null); }}>{t("+ Añadir destino a la ruta", "+ Add a place to the route")}</button>
             )}
           </div>
           {adding && (
-            <PlaceSearch id="must" autoFocus placeholder="Ciudad, parque, isla… que no te quieras perder"
+            <PlaceSearch id="must" autoFocus placeholder={t("Ciudad, parque, isla… que no te quieras perder", "A city, park, island… you don't want to miss")}
               onPick={(p) => addMust(p)}
-              onFree={(t) => { setAdding(false); setNotice(null); setMust((l) => (l.some((m) => m.text === t) ? l : [...l, { name: t, text: t }])); }} />
+              onFree={(x) => { setAdding(false); setNotice(null); setMust((l) => (l.some((m) => m.text === x) ? l : [...l, { name: x, text: x }])); }} />
           )}
           {notice && <FitNotice msg={notice} onClose={() => setNotice(null)} onAdd={notice.place ? () => { const p = notice.place!; setNotice(null); addMust(p, true); } : undefined} />}
 
-          <span className="eyebrow">¿QUÉ TIPO DE VIAJE? · PUEDES ELEGIR VARIOS</span>
+          <span className="eyebrow">{t("¿QUÉ TIPO DE VIAJE? · PUEDES ELEGIR VARIOS", "WHAT KIND OF TRIP? · PICK AS MANY AS YOU LIKE")}</span>
           <div className="theme-row">
             {STYLES.map((s) => <button key={s} type="button" className="theme" aria-pressed={styles.includes(s)} onClick={() => toggleStyle(s)}>{s}</button>)}
           </div>
 
-          <span className="eyebrow">TU EXPERIENCIA</span>
-          <div className="level-row" role="radiogroup" aria-label="Tu experiencia">
+          <span className="eyebrow">{t("TU EXPERIENCIA", "YOUR EXPERIENCE")}</span>
+          <div className="level-row" role="radiogroup" aria-label={t("Tu experiencia", "Your experience")}>
             {TRAVELER.map((l) => (
               <button key={l.id} type="button" role="radio" aria-checked={level === l.id} className="level" onClick={() => setLevel(l.id)}>
                 <b>{l.label}</b><span>{l.hint}</span>
@@ -246,17 +255,17 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
             ))}
           </div>
 
-          <span className="eyebrow">DURACIÓN</span>
-          <div className="seg" role="radiogroup" aria-label="Duración">
-            <button type="button" role="radio" aria-checked={autoDays} onClick={() => setAutoDays(true)}>Recomiéndame los días</button>
-            <button type="button" role="radio" aria-checked={!autoDays} onClick={() => setAutoDays(false)}>Elijo yo</button>
+          <span className="eyebrow">{t("DURACIÓN", "LENGTH")}</span>
+          <div className="seg" role="radiogroup" aria-label={t("Duración", "Length")}>
+            <button type="button" role="radio" aria-checked={autoDays} onClick={() => setAutoDays(true)}>{t("Recomiéndame los días", "Suggest the length")}</button>
+            <button type="button" role="radio" aria-checked={!autoDays} onClick={() => setAutoDays(false)}>{t("Elijo yo", "I'll choose")}</button>
           </div>
           {autoDays
-            ? <p className="note">Te proponemos la duración ideal para ver bien {destination.trim() || "el destino"} con tu estilo.</p>
-            : <Stepper id="st-days" label="Días" value={days} min={2} max={30} unit="días" onChange={setDays} />}
+            ? <p className="note">{t(`Te proponemos la duración ideal para ver bien ${destination.trim() || "el destino"} con tu estilo.`, `We'll suggest the right length to see ${destination.trim() || "the destination"} properly in your style.`)}</p>
+            : <Stepper id="st-days" label={t("Días", "Days")} value={days} min={2} max={30} unit={t("días", "days")} onChange={setDays} />}
 
           <label className="switch">
-            <span><b>Varios países</b><small>Añade países vecinos si el viaje gana con ello</small></span>
+            <span><b>{t("Varios países", "Several countries")}</b><small>{t("Añade países vecinos si el viaje gana con ello", "Add neighbouring countries if the trip is better for it")}</small></span>
             <input type="checkbox" checked={multi} onChange={(e) => { setMulti(e.target.checked); setOpenCountries(e.target.checked && !countries.length); }} />
             <i aria-hidden="true" />
           </label>
@@ -265,17 +274,17 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
               <button type="button" className="cpick-head" aria-expanded={openCountries} onClick={() => setOpenCountries((o) => !o)}>
                 <span className="cpick-flags" aria-hidden="true">{countries.length ? countries.slice(0, 4).map(flag).join("") : "🌍"}</span>
                 <span className="cpick-text">
-                  <b>{countries.length ? countries.map(countryName).join(", ") : `Países cerca de ${countryName(destIso) || destination}`}</b>
-                  <small>{countries.length ? `${countries.length} ${countries.length === 1 ? "país elegido" : "países elegidos"} · toca para cambiar` : "Elige los que quieras, o lo decidimos nosotros"}</small>
+                  <b>{countries.length ? countries.map(countryName).join(", ") : t(`Países cerca de ${countryName(destIso) || destination}`, `Countries near ${countryName(destIso) || destination}`)}</b>
+                  <small>{countries.length ? t(`${countries.length} ${countries.length === 1 ? "país elegido" : "países elegidos"} · toca para cambiar`, `${countries.length} ${countries.length === 1 ? "country" : "countries"} picked · tap to change`) : t("Elige los que quieras, o lo decidimos nosotros", "Pick any you like, or leave it to us")}</small>
                 </span>
                 <i className="cpick-chev" aria-hidden="true" />
               </button>
               {openCountries && (
-                <div className="cpick-list" role="listbox" aria-multiselectable="true" aria-label="Países cercanos">
+                <div className="cpick-list" role="listbox" aria-multiselectable="true" aria-label={t("Países cercanos", "Nearby countries")}>
                   {countryOptions.map((c) => (
                     <button key={c.iso} type="button" role="option" aria-selected={countries.includes(c.iso)} className="cpick-opt" onClick={() => toggleCountry(c.iso)}>
                       <span className="cpick-flag" aria-hidden="true">{flag(c.iso)}</span>
-                      <span className="cpick-name"><b>{countryName(c.iso)}</b><small>{c.km === undefined ? "Por tu destino añadido" : c.border ? "Frontera" : `A ~${(Math.max(100, Math.round(c.km / 100) * 100)).toLocaleString("es-ES")} km`}</small></span>
+                      <span className="cpick-name"><b>{countryName(c.iso)}</b><small>{c.km === undefined ? t("Por tu destino añadido", "From a place you added") : c.border ? t("Frontera", "Shares a border") : `~${(Math.max(100, Math.round(c.km / 100) * 100)).toLocaleString(locale(lang))} km`}</small></span>
                       <i className="cpick-check" aria-hidden="true" />
                     </button>
                   ))}
@@ -284,9 +293,9 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
             </div>
           )}
 
-          <Stepper id="st-trav" label="Viajeros" value={travelers} min={1} max={10} unit={travelers === 1 ? "persona" : "personas"} onChange={setTravelers} />
-          <span className="eyebrow">PRESUPUESTO</span>
-          <div className="level-row" role="radiogroup" aria-label="Presupuesto">
+          <Stepper id="st-trav" label={t("Viajeros", "Travellers")} value={travelers} min={1} max={10} unit={travelers === 1 ? t("persona", "person") : t("personas", "people")} onChange={setTravelers} />
+          <span className="eyebrow">{t("PRESUPUESTO", "BUDGET")}</span>
+          <div className="level-row" role="radiogroup" aria-label={t("Presupuesto", "Budget")}>
             {LEVELS.map((l) => (
               <button key={l.id} type="button" role="radio" aria-checked={budget === l.id} className="level" onClick={() => setBudget(l.id)}>
                 <b>{l.label}</b><span>{l.hint}</span>
@@ -295,16 +304,16 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
           </div>
           <div className="row2">
             <label className="mini-field">
-              <span>Máximo (opcional)</span>
-              <input className="field" type="number" inputMode="numeric" min={0} placeholder="€ en total" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <span>{t("Máximo (opcional)", "Maximum (optional)")}</span>
+              <input className="field" type="number" inputMode="numeric" min={0} placeholder={t("€ en total", "€ in total")} value={amount} onChange={(e) => setAmount(e.target.value)} />
             </label>
             <label className="mini-field">
-              <span>Sales desde</span>
-              <input className="field" type="text" maxLength={80} value={origin} onChange={(e) => setOrigin(e.target.value)} />
+              <span>{t("Sales desde", "Flying from")}</span>
+              <input className="field" type="text" maxLength={80} placeholder={t("Ciudad", "e.g. London")} value={origin} onChange={(e) => setOrigin(e.target.value)} />
             </label>
           </div>
           <div className="actions">
-            <button className="btn btn-ghost" type="button" onClick={() => setStep(1)}>Atrás</button>
+            <button className="btn btn-ghost" type="button" onClick={() => setStep(1)}>{t("Atrás", "Back")}</button>
             <button className="btn btn-solid" type="button" onClick={() => onSubmit({
               destination: destination.trim() || undefined, theme: theme || undefined,
               days: autoDays ? undefined : days, styles: styles.length ? styles : undefined, level, multiCountry: multi,
@@ -312,7 +321,7 @@ export default function PlannerSheet({ init, onSubmit, onReady, onClose }: {
               mustSee: must.length ? must.map((m) => m.text) : undefined,
               context: init?.context, travelers, budget,
               budgetAmount: Number(amount) > 0 ? Number(amount) : undefined, origin: origin.trim() || undefined,
-            }, label)}>Crear mi viaje</button>
+            }, label)}>{t("Crear mi viaje", "Plan my trip")}</button>
           </div>
         </>
       )}

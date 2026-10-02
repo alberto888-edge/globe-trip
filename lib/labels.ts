@@ -3,20 +3,26 @@
 // right on top of them), and search by name with flags.
 import data from "./places.json";
 import { distanceKm, type LatLng } from "./geo";
+import { currentLang } from "./lang";
 
-export interface PlaceLabel { id: string; kind: "country" | "city"; name: string; lat: number; lng: number; tier: number; iso: string }
-type Raw = { n: string; lat: number; lng: number; t: number; c: string; b?: string[] };
+export interface PlaceLabel { id: string; kind: "country" | "city"; name: string; alt?: string; lat: number; lng: number; tier: number; iso: string }
+// n = Spanish name, e = English name when different.
+type Raw = { n: string; e?: string; lat: number; lng: number; t: number; c: string; b?: string[] };
+
+// The name in the language being shown, and the other one so search finds both.
+const EN = currentLang() === "en";
+const named = (c: Raw) => (EN ? { name: c.e || c.n, ...(c.e ? { alt: c.n } : {}) } : { name: c.n, ...(c.e ? { alt: c.e } : {}) });
 
 // Built once so the globe can keep the same DOM element for the same label.
 const COUNTRIES: PlaceLabel[] = (data.countries as Raw[])
-  .map((c, i) => ({ id: `c${i}`, kind: "country", name: c.n, lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
+  .map((c, i) => ({ id: `c${i}`, kind: "country", ...named(c), lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
 const CITIES: PlaceLabel[] = (data.cities as Raw[])
-  .map((c, i) => ({ id: `p${i}`, kind: "city", name: c.n, lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
+  .map((c, i) => ({ id: `p${i}`, kind: "city", ...named(c), lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
 
 const COUNTRY_BY_ISO = new Map(COUNTRIES.map((c) => [c.iso, c]));
 const LAND_NEIGHBOURS = new Map((data.countries as Raw[]).map((c) => [c.c, c.b || []]));
 export const countryName = (iso?: string) => (iso && COUNTRY_BY_ISO.get(iso)?.name) || "";
-export const countryByName = (name: string) => COUNTRIES.find((c) => norm(c.name) === norm(name));
+export const countryByName = (name: string) => COUNTRIES.find((c) => norm(c.name) === norm(name) || (!!c.alt && norm(c.alt) === norm(name)));
 export const countryByIso = (iso?: string) => (iso ? COUNTRY_BY_ISO.get(iso) : undefined);
 
 /** 🇯🇵 from "JP". */
@@ -45,7 +51,7 @@ export function loadMorePlaces(): Promise<boolean> {
     more = fetch("/cities.json")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Raw[]) => {
-        const extra: PlaceLabel[] = list.map((c, i) => ({ id: `m${i}`, kind: "city", name: c.n, lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
+        const extra: PlaceLabel[] = list.map((c, i) => ({ id: `m${i}`, kind: "city", ...named(c), lat: c.lat, lng: c.lng, tier: c.t, iso: c.c }));
         ALL_CITIES = [...CITIES, ...extra];
         BY_ISO = null;
         SORTED = [...COUNTRIES, ...ALL_CITIES].sort(byPriority);
@@ -79,9 +85,14 @@ export const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").to
 export function searchPlaces(query: string, limit = 7): PlaceLabel[] {
   const q = norm(query);
   if (q.length < 2) return [];
+  const at = (name: string) => {
+    const n = norm(name);
+    return n === q ? 0 : n.startsWith(q) ? 1 : n.split(/[\s\-'(]+/).some((w) => w.startsWith(q)) ? 2 : n.includes(q) ? 3 : -1;
+  };
   const score = (l: PlaceLabel) => {
-    const n = norm(l.name);
-    const where = n === q ? 0 : n.startsWith(q) ? 1 : n.split(/[\s\-'(]+/).some((w) => w.startsWith(q)) ? 2 : n.includes(q) ? 3 : -1;
+    // Either language finds the place: "Kioto" and "Kyoto", "Londres" and "London".
+    const own = at(l.name), other = l.alt ? at(l.alt) : -1;
+    const where = own >= 0 && (other < 0 || own <= other) ? own : other;
     if (where < 0) return -1;
     return where * 10 + (l.kind === "country" ? 0 : 2 + l.tier);
   };

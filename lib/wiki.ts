@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 
 import { fileOf, lookupPlace, type PlaceInfo, type PlaceQuery } from "./wikiPhoto";
+import { currentLang } from "./lang";
 export type { PlaceInfo, PlaceQuery } from "./wikiPhoto";
 
 const TTL = 30 * 24 * 3600 * 1000;
@@ -12,10 +13,10 @@ const mem = new Map<string, Promise<PlaceInfo | null>>();
 const claimed = new Map<string, string>();
 
 // v4: earlier versions could cache a map as a place's picture.
-const keyOf = (q: PlaceQuery) => `gt:wiki4:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
+const keyOf = (q: PlaceQuery) => `gt:wiki4:${currentLang()}:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
 const owner = (q: PlaceQuery) => (q.wiki || q.name).toLowerCase();
 
-const fresh = (q: PlaceQuery) => lookupPlace(q, (u) => fetch(u), claimed, owner(q));
+const fresh = (q: PlaceQuery) => lookupPlace(q, (u) => fetch(u), claimed, owner(q), currentLang());
 
 export function placeInfo(q: PlaceQuery): Promise<PlaceInfo | null> {
   const key = keyOf(q);

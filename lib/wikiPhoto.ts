@@ -104,14 +104,17 @@ const SEARCH_KM = 15;
  * `claimed` maps a photo's file to the place that showed it first; another place
  * can't take it. Pass the same map for every place of a page.
  */
-export async function lookupPlace(q: PlaceQuery, get: Fetch, claimed?: Map<string, string>, me = q.wiki || q.name): Promise<PlaceInfo | null> {
+export async function lookupPlace(q: PlaceQuery, get: Fetch, claimed?: Map<string, string>, me = q.wiki || q.name, lang: "es" | "en" = "es"): Promise<PlaceInfo | null> {
   const where = [q.name, q.country].filter(Boolean).join(" ");
+  // The reader's Wikipedia first (its text is what they read), then the other one for a photo.
+  const [mine, other] = lang === "es" ? ["es", "en"] : ["en", "es"];
   const attempts: [exact: boolean, run: () => Promise<Article | null>][] = [
-    [true, () => (q.wiki ? summary(get, "es", q.wiki) : Promise.resolve(null))],
-    [true, () => summary(get, "es", q.name)],
-    [false, async () => { const t = await search(get, "es", where); return t ? summary(get, "es", t) : null; }],
-    [true, () => summary(get, "en", q.name)],
-    [false, async () => { const t = await search(get, "en", where); return t ? summary(get, "en", t) : null; }],
+    [true, () => (q.wiki ? summary(get, mine, q.wiki) : Promise.resolve(null))],
+    [true, () => summary(get, mine, q.name)],
+    [false, async () => { const t = await search(get, mine, where); return t ? summary(get, mine, t) : null; }],
+    [true, () => (q.wiki ? summary(get, other, q.wiki) : Promise.resolve(null))],
+    [true, () => summary(get, other, q.name)],
+    [false, async () => { const t = await search(get, other, where); return t ? summary(get, other, t) : null; }],
   ];
   const free = (url: string) => {
     const f = fileOf(url), owner = claimed?.get(f);
@@ -126,12 +129,14 @@ export async function lookupPlace(q: PlaceQuery, get: Fetch, claimed?: Map<strin
     tried.add(`${a.lang}:${a.title}`);
     // A different place that happens to come up in the search.
     if (q.lat !== undefined && q.lng !== undefined && a.coords && km({ lat: q.lat, lng: q.lng }, a.coords) > (exact ? EXACT_KM : SEARCH_KM)) continue;
-    if (!text && a.extract) text = a;
+    // The blurb only in the reader's language.
+    if (!text && a.extract && a.lang === mine) text = a;
     let photo = isPhoto(a.thumb) && free(a.thumb!) ? a.thumb : undefined;
     if (!photo) photo = (await articlePhotos(get, a).catch(() => [])).find(free);
     if (photo) {
       claim(photo);
-      return { ...asInfo(text || a, photo) };
+      // Text only from an article in the reader's language; the photo can come from either.
+      return asInfo(text || { ...a, extract: a.lang === mine ? a.extract : undefined }, photo);
     }
   }
   return text ? asInfo(text) : null;

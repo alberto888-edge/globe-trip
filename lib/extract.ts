@@ -11,6 +11,21 @@ export class ExtractError extends Error {
   constructor(public code: "no_places" | "not_configured" | "upstream", message: string) { super(message); }
 }
 
+type Lang = "es" | "en";
+const tr = (lang: Lang, es: string, en: string) => (lang === "es" ? es : en);
+
+// The prompts are written in Spanish; for an English-speaking traveller the same prompt
+// asks for every visible text in English (the tool descriptions say "en español" in a
+// few places, which would otherwise win).
+const EN_OUTPUT = `
+
+IDIOMA DE SALIDA: el viajero lee inglés. Escribe en inglés natural todo lo que verá: nombres de rutas y viajes, sub, note, summary, reason, nombres y notas de actividades, riesgos, partidas y nota del presupuesto, consejos y nombres de países (Japan, Vietnam). Los lugares, como los escribiría un angloparlante (Kyoto, Hanoi, Cusco). Los títulos de Wikipedia, de la Wikipedia en inglés.`;
+function localize(system: string, tool: Anthropic.Tool, lang: Lang): [string, Anthropic.Tool] {
+  if (lang === "es") return [system, tool];
+  const sys = system.replace(/Todo en español\./g, "Todo en inglés.").replace(/en español/g, "en inglés") + EN_OUTPUT;
+  return [sys, JSON.parse(JSON.stringify(tool).replace(/en español/g, "en inglés"))];
+}
+
 // Reading on-screen text off video frames is the one job that needs the good model:
 // it is the whole differentiator of the app. Trip plans and activity suggestions are
 // ordinary text work, so they run on the cheap model.
@@ -130,14 +145,15 @@ export function buildVideoText(ctx: Partial<VideoContext> & { userText?: string 
   return `<video>\n${parts.join("\n\n") || "(sin texto)"}\n</video>`;
 }
 
-export async function extractCandidates(ctx: Partial<VideoContext> & { userText?: string }, images: VideoImage[] = []) {
+export async function extractCandidates(ctx: Partial<VideoContext> & { userText?: string }, images: VideoImage[] = [], lang: Lang = "es") {
   const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: buildVideoText(ctx) }];
   images.forEach((img, i) => {
     content.push({ type: "text", text: `Imagen ${i + 1} — ${img.label}` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: img.jpeg.toString("base64") } });
   });
   if (images.length) content.push({ type: "text", text: "Fin de las imágenes. Detecta los lugares y llama a save_places." });
-  return toCandidates(await callTool(VIDEO_SYSTEM, content, VIDEO_TOOL), images.length);
+  const [system, tool] = localize(VIDEO_SYSTEM, VIDEO_TOOL, lang);
+  return toCandidates(await callTool(system, content, tool), images.length, lang);
 }
 
 const Num = z.coerce.number();
@@ -162,10 +178,11 @@ const CandidateSchema = z.object({
 const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** Validates the model output. Exported for tests. */
-export function toCandidates(input: unknown, imageCount: number): { name: string; candidates: Candidate[]; risks?: Route["risks"] } {
+export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"] } {
   const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(input);
   if (!r.success) throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
-  if (!r.data.found) throw new ExtractError("no_places", r.data.reason || "No he encontrado lugares concretos en este vídeo.");
+  const none = tr(lang, "No he encontrado lugares concretos en este vídeo.", "I couldn't find any specific places in this video.");
+  if (!r.data.found) throw new ExtractError("no_places", r.data.reason || none);
   const candidates: Candidate[] = [];
   const byKey = new Map<string, Candidate>();
   const round = (x: number) => Math.round(x * 1e4) / 1e4;
@@ -225,15 +242,15 @@ export function toCandidates(input: unknown, imageCount: number): { name: string
   for (const c of candidates) {
     if (!c.spots?.length) { delete c.spots; continue; }
     const names = c.spots.map((x) => x.name);
-    if (!c.sub) c.sub = (names.length === 1 ? names[0] : `${names[0]} y ${names.length - 1} más`).slice(0, 40);
-    if (!c.note) c.note = `Del vídeo: ${names.join(", ")}.`.slice(0, 200);
+    if (!c.sub) c.sub = (names.length === 1 ? names[0] : `${names[0]} ${tr(lang, "y", "and")} ${names.length - 1} ${tr(lang, "más", "more")}`).slice(0, 40);
+    if (!c.note) c.note = `${tr(lang, "Del vídeo", "From the video")}: ${names.join(", ")}.`.slice(0, 200);
   }
-  if (!candidates.length) throw new ExtractError("no_places", "No he encontrado lugares concretos en este vídeo.");
+  if (!candidates.length) throw new ExtractError("no_places", none);
   // A whole country next to concrete spots adds nothing to the route.
   const concrete = candidates.filter((c) => c.scope === "place");
   const kept = concrete.length ? concrete : candidates;
   const countries = [...new Set(kept.map((c) => c.country).filter(Boolean) as string[])];
-  return { name: (r.data.name || "Tu ruta").slice(0, 48), candidates: kept, risks: normalizeRisk(r.data.risks, countries) };
+  return { name: (r.data.name || tr(lang, "Tu ruta", "Your route")).slice(0, 48), candidates: kept, risks: normalizeRisk(r.data.risks, countries, lang) };
 }
 
 // ---------------------------------------------------------------- plan a trip from scratch
@@ -302,7 +319,7 @@ export function buildPlanPrompt(req: PlanRequest): string {
     req.context ? `Contexto: ${req.context}` : "",
     `Viajeros: ${req.travelers}`,
     `Presupuesto: ${req.budget}${req.budgetAmount ? ` (máximo aproximado ${req.budgetAmount} € en total)` : ""}`,
-    `Origen: ${req.origin || "Madrid"}`,
+    `Origen: ${req.origin || (req.lang === "en" ? "Londres" : "Madrid")}`,
   ].filter(Boolean);
   return `<peticion>\n${lines.join("\n")}\n</peticion>`;
 }
@@ -317,7 +334,7 @@ const BudgetSchema = z.object({
 /** Validates a plan. Exported for tests. */
 export function toPlanRoute(input: unknown, req: PlanRequest): Route {
   const r = z.object({
-    name: z.string().default("Tu viaje"),
+    name: z.string().default(tr(req.lang || "es", "Tu viaje", "Your trip")),
     summary: z.string().optional(),
     stops: z.array(z.unknown()).default([]),
     budget: BudgetSchema.optional(),
@@ -329,7 +346,7 @@ export function toPlanRoute(input: unknown, req: PlanRequest): Route {
     const d = s.data;
     return { name: d.name.slice(0, 40), country: d.country, wiki: d.wiki?.trim() || undefined, sub: d.sub.slice(0, 40), note: d.note.slice(0, 200), days: Math.max(1, Math.round(d.days || 1)), lat: d.lat, lng: d.lng };
   }).slice(0, 10);
-  if (!stops.length) throw new ExtractError("no_places", "No he podido montar un viaje con eso. Prueba con otro destino.");
+  if (!stops.length) throw new ExtractError("no_places", tr(req.lang || "es", "No he podido montar un viaje con eso. Prueba con otro destino.", "I couldn't build a trip from that. Try another destination."));
   const b = r.data.budget;
   const budget: Budget | undefined = b ? {
     currency: "EUR",
@@ -350,13 +367,14 @@ export function toPlanRoute(input: unknown, req: PlanRequest): Route {
     summary: r.data.summary?.slice(0, 300),
     budget,
     tips: r.data.tips?.map((t) => t.slice(0, 200)).slice(0, 5),
-    risks: normalizeRisk(r.data.risks, countries),
+    risks: normalizeRisk(r.data.risks, countries, req.lang || "es"),
     request: { destination: req.destination, theme: req.theme, styles: req.styles, level: req.level, multiCountry: req.multiCountry, countries: req.countries, mustSee: req.mustSee, travelers: req.travelers, budget: req.budget, origin: req.origin },
   };
 }
 
 export async function planTrip(req: PlanRequest): Promise<Route> {
-  return toPlanRoute(await callTool(PLAN_SYSTEM, buildPlanPrompt(req), PLAN_TOOL, 4000, FAST_MODEL()), req);
+  const [system, tool] = localize(PLAN_SYSTEM, PLAN_TOOL, req.lang || "es");
+  return toPlanRoute(await callTool(system, buildPlanPrompt(req), tool, 4000, FAST_MODEL()), req);
 }
 
 // ---------------------------------------------------------------- things to do at each stop
@@ -431,7 +449,7 @@ const ActivitySchema = z.object({
 });
 
 /** Validates the model output: one list per stop, in the stops' order. Exported for tests. */
-export function toActivities(input: unknown, count: number, must: (string[] | undefined)[] = []): Activity[][] {
+export function toActivities(input: unknown, count: number, must: (string[] | undefined)[] = [], lang: Lang = "es"): Activity[][] {
   const out: Activity[][] = Array.from({ length: count }, () => []);
   const r = z.object({ stops: z.array(z.object({ index: Num, activities: z.array(z.unknown()).default([]) })) }).safeParse(input);
   if (!r.success) throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
@@ -459,12 +477,13 @@ export function toActivities(input: unknown, count: number, must: (string[] | un
     });
     out[i] = [...first, ...list].slice(0, 4 + wanted.length);
   });
-  if (out.every((l) => !l.length)) throw new ExtractError("no_places", "No he encontrado actividades para estos sitios.");
+  if (out.every((l) => !l.length)) throw new ExtractError("no_places", tr(lang, "No he encontrado actividades para estos sitios.", "I couldn't find activities for these places."));
   return out;
 }
 
 export async function suggestActivities(req: ActivitiesRequest): Promise<Activity[][]> {
-  return toActivities(await callTool(ACTIVITIES_SYSTEM, buildActivitiesPrompt(req), ACTIVITIES_TOOL, 4000, FAST_MODEL()), req.stops.length, req.stops.map((s) => s.must));
+  const [system, tool] = localize(ACTIVITIES_SYSTEM, ACTIVITIES_TOOL, req.lang || "es");
+  return toActivities(await callTool(system, buildActivitiesPrompt(req), tool, 4000, FAST_MODEL()), req.stops.length, req.stops.map((s) => s.must), req.lang || "es");
 }
 
 // ---------------------------------------------------------------- optional coordinate refinement

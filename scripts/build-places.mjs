@@ -1,4 +1,4 @@
-// Builds the place names used on the globe and in search, in Spanish:
+// Builds the place names used on the globe and in search, in Spanish (n) and English (e, only when different):
 //  - lib/places.json    countries + big cities + tourist spots (bundled, shown from far away)
 //  - public/cities.json every town over ~50k people (loaded after start, shown up close and in search)
 // Run once (output is committed):  cd scripts && npm i world-countries all-the-cities && node build-places.mjs
@@ -130,6 +130,22 @@ const TOURIST = [
 
 const round = (n) => Math.round(n * 100) / 100;
 
+// English names for the tourist spots above whose name is Spanish (the rest are the same).
+const SPOT_EN = {
+  "Krak de los Caballeros": "Krak des Chevaliers", "Mar Muerto": "Dead Sea", "Valle Sagrado": "Sacred Valley",
+  "Salar de Uyuni": "Uyuni Salt Flat", "Lago Titicaca": "Lake Titicaca", "Isla de Pascua": "Easter Island",
+  "Cataratas del Iguazú": "Iguazu Falls", "Galápagos": "Galápagos Islands", "Gran Cañón": "Grand Canyon",
+  "Parque Yellowstone": "Yellowstone", "Gran Barrera de Coral": "Great Barrier Reef", "Bahía de Ha Long": "Ha Long Bay",
+  "Muralla China": "Great Wall of China", "Everest (campo base)": "Everest Base Camp", "Maldivas": "Maldives",
+  "Capadocia": "Cappadocia", "Pirámides de Guiza": "Pyramids of Giza", "Masái Mara": "Maasai Mara",
+  "Cataratas Victoria": "Victoria Falls", "Delta del Okavango": "Okavango Delta", "Parque Kruger": "Kruger National Park",
+  "Mauricio": "Mauritius", "Dolomitas": "Dolomites", "Lago de Como": "Lake Como", "Toscana": "Tuscany",
+  "Provenza": "Provence", "Córcega": "Corsica", "Islas Lofoten": "Lofoten Islands", "Círculo Dorado": "Golden Circle",
+  "Laponia": "Lapland", "Isla de Skye": "Isle of Skye", "Monte Fuji": "Mount Fuji", "Cabo de Gata": "Cabo de Gata",
+};
+// The English name goes in `e` only when it differs from the Spanish one, to keep the files small.
+const withEn = (o, en) => (en && en !== o.n ? { ...o, e: en } : o);
+
 // world-countries' Spanish names that differ from common Spanish usage.
 const COUNTRY_ES = {
   Iran: "Irán", Bahrein: "Baréin", Brunei: "Brunéi", Botswana: "Botsuana", Djibouti: "Yibuti", "Sierra Leone": "Sierra Leona",
@@ -139,7 +155,7 @@ const COUNTRY_ES = {
 const cca2 = new Map(countries.map((c) => [c.cca3, c.cca2]));
 const outCountries = countries
   .filter((c) => c.area > 300 && c.latlng?.length === 2)
-  .map((c) => ({
+  .map((c) => withEn({
     n: COUNTRY_ES[c.translations?.spa?.common] || c.translations?.spa?.common || c.name.common,
     c: c.cca2,
     lat: round(c.latlng[0]),
@@ -147,7 +163,7 @@ const outCountries = countries
     t: c.area > 1_000_000 ? 1 : c.area > 150_000 ? 2 : 3,
     // land neighbours, for "Varios países"
     ...(c.borders?.length ? { b: c.borders.map((x) => cca2.get(x)).filter(Boolean) } : {}),
-  }));
+  }, c.name.common));
 
 const byKey = new Map();
 const add = (c, tier) => {
@@ -155,13 +171,15 @@ const add = (c, tier) => {
   const prev = byKey.get(key);
   if (prev && prev.t <= tier) return;
   const [lng, lat] = c.loc.coordinates;
-  byKey.set(key, { n: nameOf(c), lat: round(lat), lng: round(lng), t: tier, c: c.country });
+  byKey.set(key, withEn({ n: nameOf(c), lat: round(lat), lng: round(lng), t: tier, c: c.country }, enOf(c)));
 };
 // Spanish writes Vietnamese places without tone marks (Hội An → Hoi An).
 const plain = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/Đ/g, "D").replace(/đ/g, "d");
 // Same for GeoNames' scholarly transliterations of Arabic, Persian and Turkic names (Ḩamāh → Hamah).
 const PLAIN = new Set(["VN", "SY", "IQ", "SA", "JO", "LB", "YE", "OM", "AE", "QA", "KW", "BH", "EG", "LY", "SD", "IR", "AF", "PK", "UZ", "TM", "KZ", "KG", "TJ", "AZ", "MA", "DZ", "TN", "MR"]);
 const nameOf = (c) => ES[c.name] || ES[plain(c.name)] || (PLAIN.has(c.country) ? plain(c.name).replace(/[ʻʼ‘’`]/g, "'") : c.name);
+// GeoNames' own name is the English one (with the same transliteration clean-up).
+const enOf = (c) => (PLAIN.has(c.country) ? plain(c.name).replace(/[ʻʼ‘’`]/g, "'") : c.name);
 for (const c of cities) {
   const capital = c.featureCode === "PPLC";
   if (c.population >= 7_000_000) add(c, 1);
@@ -183,7 +201,7 @@ for (const [name, cc] of [["Tadmur", "SY"], ["Hội An", "VN"], ["Huế", "VN"],
   if (hit) add(hit, 3);
 }
 const taken = new Set([...byKey.values()].map((c) => c.n.toLowerCase() + c.c));
-for (const [n, c, lat, lng] of SPOTS) if (!taken.has(n.toLowerCase() + c)) byKey.set(`s:${n}`, { n, lat, lng, t: 3, c, s: 1 });
+for (const [n, c, lat, lng] of SPOTS) if (!taken.has(n.toLowerCase() + c)) byKey.set(`s:${n}`, withEn({ n, lat, lng, t: 3, c, s: 1 }, SPOT_EN[n]));
 
 const all = [...byKey.values()].sort((a, b) => a.t - b.t);
 const outCities = all.filter((c) => c.t <= 3);

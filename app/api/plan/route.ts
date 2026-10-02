@@ -16,7 +16,9 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice
 
 export async function POST(req: Request) {
   let b: Record<string, unknown>;
-  try { b = await req.json(); } catch { return fail(400, "bad_request", "Petición no válida."); }
+  try { b = await req.json(); } catch { return fail(400, "bad_request", "Petición no válida / Invalid request."); }
+  const lang = b.lang === "en" ? "en" : "es";
+  const t = (es: string, en: string) => (lang === "es" ? es : en);
 
   const plan: PlanRequest = {
     destination: str(b.destination, 120) || undefined,
@@ -32,11 +34,12 @@ export async function POST(req: Request) {
     budget: LEVELS.includes(b.budget as BudgetLevel) ? (b.budget as BudgetLevel) : "medio",
     budgetAmount: Number(b.budgetAmount) > 0 ? Math.min(100000, Math.round(Number(b.budgetAmount))) : undefined,
     origin: str(b.origin, 80) || undefined,
+    lang,
   };
-  if (!plan.destination && !plan.theme) return fail(400, "bad_request", "Elige un destino o un tipo de viaje.");
+  if (!plan.destination && !plan.theme) return fail(400, "bad_request", t("Elige un destino o un tipo de viaje.", "Pick a destination or a kind of trip."));
 
   const ip = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || req.headers.get("x-real-ip") || "anon";
-  if (!allow(ip)) return fail(429, "rate_limited", "Has hecho muchas peticiones seguidas. Prueba de nuevo en unos minutos.");
+  if (!allow(ip)) return fail(429, "rate_limited", t("Has hecho muchas peticiones seguidas. Prueba de nuevo en unos minutos.", "Too many requests in a row. Try again in a few minutes."));
 
   try {
     const route = await planTrip(plan);
@@ -45,11 +48,11 @@ export async function POST(req: Request) {
   } catch (e) {
     if (e instanceof ExtractError) {
       if (e.code === "no_places") return fail(422, "no_places", e.message);
-      if (e.code === "not_configured") return fail(500, "not_configured", "El servidor no tiene configurada la clave de la IA (ANTHROPIC_API_KEY).");
+      if (e.code === "not_configured") return fail(500, "not_configured", t("El servidor no tiene configurada la clave de la IA (ANTHROPIC_API_KEY).", "The server has no AI key configured (ANTHROPIC_API_KEY)."));
       console.error("[plan]", e.message);
-      return fail(502, "upstream", "La IA no ha respondido bien. Vuelve a intentarlo.");
+      return fail(502, "upstream", t("La IA no ha respondido bien. Vuelve a intentarlo.", "The AI didn't answer properly. Please try again."));
     }
     console.error("[plan]", e);
-    return fail(500, "upstream", "Algo ha fallado en el servidor. Vuelve a intentarlo.");
+    return fail(500, "upstream", t("Algo ha fallado en el servidor. Vuelve a intentarlo.", "Something went wrong on the server. Please try again."));
   }
 }
