@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -33,7 +34,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
         <link rel="preload" as="image" href="/textures/earth.jpg" />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Anonymous visit counts, no cookies: the number that decides the next phase. */}
+        <Analytics />
+      </body>
     </html>
   );
 }

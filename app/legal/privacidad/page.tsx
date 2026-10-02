@@ -60,7 +60,7 @@ export default function Page() {
       <h2>Con quién se comparte</h2>
       <p>Solo con los proveedores necesarios para que la app funcione:</p>
       <ul>
-        <li><strong>Vercel</strong> — alojamiento y ejecución del servidor.</li>
+        <li><strong>Vercel</strong> — alojamiento, ejecución del servidor y estadísticas de visitas anónimas y agregadas (sin cookies ni identificadores personales).</li>
         <li><strong>Anthropic</strong> — el modelo que lee los fotogramas e identifica lugares. Recibe las imágenes y el texto del vídeo, no datos personales tuyos.</li>
         <li><strong>Esri (ArcGIS)</strong> — imágenes de satélite del globo. Tu navegador las descarga directamente de sus servidores, que ven tu dirección IP.</li>
         <li><strong>Mapbox</strong> — geocodificación de los lugares detectados.</li>

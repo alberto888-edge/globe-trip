@@ -9,7 +9,7 @@ export default function Page() {
     <>
       <h1>Política de cookies</h1>
       <p className="legal-lead">
-        Hoy esta web no usa cookies de seguimiento ni de publicidad. Tampoco analítica.
+        Esta web no usa cookies de seguimiento ni de publicidad. Para saber cuánta gente la visita usa Vercel Web Analytics, que no instala cookies: cuenta visitas de forma agregada y anónima, y la sesión se descarta a las 24 horas.
       </p>
 
       <h2>Lo que sí se usa</h2>
