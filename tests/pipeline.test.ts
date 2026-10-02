@@ -369,3 +369,10 @@ test("los sitios del vídeo salen primero en las actividades, aunque la IA los o
   assert.equal(acts[0][2].fromVideo, undefined);
   assert.match(buildActivitiesPrompt({ stops: [{ name: "Hanói", country: "Vietnam", days: 3, must: ["Train Street"] }] }), /Del vídeo: Train Street/);
 });
+
+test("las partidas del presupuesto quedan cortas, sin paréntesis cortados", () => {
+  const r = toPlanRoute({ name: "Japan", stops: [{ name: "Tokyo", country: "Japan", sub: "", note: "", days: 3, lat: 35.68, lng: 139.69 }],
+    budget: { total: 3000, breakdown: [{ label: "Accommodation (3-star hotels, 5 nights)", amount: 900 }, { label: "Local transport (JR Pass, metro)", amount: 400 }, { label: "Food", amount: 300 }] } },
+    { budget: "medio", travelers: 2, lang: "en" });
+  assert.deepEqual(r.budget!.breakdown.map((b) => b.label), ["Accommodation", "Local transport", "Food"]);
+});

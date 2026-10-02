@@ -275,7 +275,7 @@ const PLAN_TOOL: Anthropic.Tool = {
           perPerson: { type: "number", description: "Coste por persona, en euros." },
           breakdown: {
             type: "array",
-            items: { type: "object", properties: { label: { type: "string" }, amount: { type: "number" } }, required: ["label", "amount"] },
+            items: { type: "object", properties: { label: { type: "string", description: "Nombre corto de la partida, una o dos palabras, sin paréntesis (los detalles van en note)." }, amount: { type: "number" } }, required: ["label", "amount"] },
             description: "Partidas en euros para todo el grupo: Vuelos, Alojamiento, Comida, Transporte local, Actividades…",
           },
           note: { type: "string", description: "Qué incluye y qué no, en una frase." },
@@ -352,7 +352,8 @@ export function toPlanRoute(input: unknown, req: PlanRequest): Route {
     currency: "EUR",
     total: Math.round(b.total),
     perPerson: b.perPerson ? Math.round(b.perPerson) : Math.round(b.total / Math.max(1, req.travelers)),
-    breakdown: b.breakdown.map((x) => ({ label: x.label.slice(0, 30), amount: Math.round(x.amount) })).slice(0, 8),
+    // A short label; anything in brackets is detail the model should have put in the note.
+    breakdown: b.breakdown.map((x) => ({ label: x.label.replace(/\s*\(.*$/, "").trim().slice(0, 32) || x.label.slice(0, 32), amount: Math.round(x.amount) })).slice(0, 8),
     note: b.note?.slice(0, 200),
   } : undefined;
   const ranged = withDayRanges(orderStops(stops));
