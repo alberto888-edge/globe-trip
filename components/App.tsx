@@ -293,7 +293,7 @@ export default function App() {
     setActs({ id: r.id, loading: true });
     try {
       const lists = await fetchActivities({
-        stops: idx.map((i) => ({ name: r.stops[i].name, country: r.stops[i].country, days: r.stops[i].days })),
+        stops: idx.map((i) => ({ name: r.stops[i].name, country: r.stops[i].country, days: r.stops[i].days, must: r.stops[i].spots?.map((x) => x.name) })),
         styles: r.request?.styles, level: r.request?.level,
       });
       const byName = new Map(idx.map((i, k) => [r.stops[i].name, lists[k]] as const));

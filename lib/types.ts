@@ -20,6 +20,14 @@ export interface Stop {
   wiki?: string; // Wikipedia (es) article title, for the photo and blurb
   activities?: Activity[];
   added?: boolean; // put in by the person after the trip was made
+  spots?: Spot[]; // specific places from the video inside this stop (a street, a market, a temple)
+}
+
+/** A specific place the video showed inside a city: it becomes a must-do there, not a destination. */
+export interface Spot {
+  name: string;
+  note?: string;
+  wiki?: string;
 }
 
 /** Something to do at a stop: a hike, a museum, a safari, an event, a day trip… */
@@ -35,6 +43,7 @@ export interface Activity {
   season?: string; // when it happens or is best (events, migrations, festivals)
   price?: string; // rough price per person, e.g. "≈ 40 €"
   wiki?: string;
+  fromVideo?: boolean; // a spot the video showed
 }
 
 export interface Budget {
@@ -91,6 +100,7 @@ export interface Candidate {
   wiki?: string;
   frame?: number; // index into AnalyzeOk.frames
   scope?: "place" | "region" | "country"; // a whole country/region means the video didn't name concrete spots
+  spots?: Spot[]; // specific places from the video inside this city
 }
 
 export interface AnalyzeOk {
@@ -135,7 +145,7 @@ export interface PlanRequest {
 }
 
 export interface ActivitiesRequest {
-  stops: { name: string; country?: string; days?: number }[];
+  stops: { name: string; country?: string; days?: number; must?: string[] }[];
   styles?: string[];
   level?: TravelerLevel;
 }

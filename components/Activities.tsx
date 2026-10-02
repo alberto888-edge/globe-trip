@@ -26,11 +26,12 @@ export async function fetchActivities(req: ActivitiesRequest, signal?: AbortSign
 
 export function ActivityCard({ a }: { a: Activity }) {
   return (
-    <div className={`act ${a.length === "noche fuera" || a.length === "día completo" ? "act--trip" : ""}`}>
+    <div className={`act ${a.length === "noche fuera" || a.length === "día completo" ? "act--trip" : ""} ${a.fromVideo ? "act--video" : ""}`}>
       {a.wiki
         ? <span className="act-photo"><PlacePhoto q={{ name: a.wiki, wiki: a.wiki }} alt={a.name} /><i aria-hidden="true">{ICON[a.kind]}</i></span>
         : <span className="act-icon" aria-hidden="true">{ICON[a.kind]}</span>}
       <span className="act-text">
+        {a.fromVideo && <span className="act-video">📍 Del vídeo</span>}
         <b>{a.name}</b>
         {a.note && <span>{a.note}</span>}
         <span className="act-meta">

@@ -326,3 +326,45 @@ test("toActivities keeps one list per stop and fixes unknown kinds", () => {
   assert.throws(() => toActivities({ stops: [] }, 2), /No he encontrado/);
   assert.match(buildActivitiesPrompt({ stops: [{ name: "Cuzco", country: "Perú", days: 4 }], styles: ["Explorador"] }), /1\. Cuzco, Perú \(4 días\)[\s\S]*Explorador/);
 });
+
+test("un sitio dentro de una ciudad se convierte en la ciudad con ese sitio como imprescindible", () => {
+  // Alberto's case: a video of a famous street in Vietnam became a trip to the street itself.
+  const out = toCandidates({ found: true, name: "Hanói", places: [
+    { name: "Train Street", country: "Vietnam", sub: "Calle", note: "El tren pasa rozando los cafés.", days: 1, lat: 21.0285, lng: 105.8445, frame: 1, scope: "place", city: "Hanói", city_lat: 21.0278, city_lng: 105.8342, city_wiki: "Hanói", city_days: 3 },
+    { name: "Lago Hoan Kiem", country: "Vietnam", sub: "Lago", note: "Paseo al atardecer.", days: 1, lat: 21.0287, lng: 105.8523, frame: 2, scope: "place", city: "Hanoi" },
+    { name: "Bahía de Ha Long", country: "Vietnam", sub: "Bahía", note: "Crucero de una noche.", days: 2, lat: 20.91, lng: 107.18, frame: 3, scope: "place" },
+  ] }, 3);
+  assert.equal(out.candidates.length, 2, "la calle y el lago se agrupan en Hanói; Ha Long sigue siendo un destino");
+  const hanoi = out.candidates[0];
+  assert.equal(hanoi.name, "Hanói");
+  assert.equal(hanoi.lat, 21.0278, "coordenadas de la ciudad, no de la calle");
+  assert.equal(hanoi.days, 3);
+  assert.equal(hanoi.wiki, "Hanói");
+  assert.deepEqual(hanoi.spots?.map((s) => s.name), ["Train Street", "Lago Hoan Kiem"], "'Hanoi' sin tilde es la misma ciudad");
+  assert.equal(out.candidates[1].name, "Bahía de Ha Long");
+  assert.equal(out.candidates[1].spots, undefined);
+});
+
+test("si la ciudad también sale sola, se queda con sus datos y con los sitios", () => {
+  const out = toCandidates({ found: true, places: [
+    { name: "Train Street", country: "Vietnam", sub: "Calle", note: "", days: 1, lat: 21.03, lng: 105.84, frame: 0, scope: "place", city: "Hanói" },
+    { name: "Hanói", country: "Vietnam", sub: "Capital", note: "Barrio Antiguo y street food.", days: 4, lat: 21.0278, lng: 105.8342, frame: 0, scope: "place" },
+  ] }, 0);
+  assert.equal(out.candidates.length, 1);
+  assert.equal(out.candidates[0].sub, "Capital");
+  assert.equal(out.candidates[0].days, 4);
+  assert.deepEqual(out.candidates[0].spots?.map((s) => s.name), ["Train Street"]);
+});
+
+test("los sitios del vídeo salen primero en las actividades, aunque la IA los olvide", () => {
+  const acts = toActivities({ stops: [{ index: 1, activities: [
+    { name: "Tour de street food por el Barrio Antiguo", kind: "gastronomía", length: "horas", note: "x" },
+    { name: "Train Street de Hanói", kind: "cultura", length: "horas", note: "Ve a las 15:00." },
+  ] }] }, 1, [["Train Street", "Lago Hoan Kiem"]]);
+  assert.equal(acts[0][0].name, "Train Street de Hanói");
+  assert.equal(acts[0][0].fromVideo, true);
+  assert.equal(acts[0][1].name, "Lago Hoan Kiem", "el que la IA no devolvió se añade igualmente");
+  assert.equal(acts[0][1].fromVideo, true);
+  assert.equal(acts[0][2].fromVideo, undefined);
+  assert.match(buildActivitiesPrompt({ stops: [{ name: "Hanói", country: "Vietnam", days: 3, must: ["Train Street"] }] }), /Del vídeo: Train Street/);
+});

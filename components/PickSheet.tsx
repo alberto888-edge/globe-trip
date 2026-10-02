@@ -25,7 +25,7 @@ export default function PickSheet({ result, onConfirm, onClose }: { result: Anal
             </span>
             <span className="pick-text">
               <b>{c.name}</b>
-              <span>{[c.country, c.sub].filter(Boolean).join(" · ")}</span>
+              <span>{c.spots?.length ? [c.country, `📍 ${c.spots.map((x) => x.name).join(", ")}`].filter(Boolean).join(" · ") : [c.country, c.sub].filter(Boolean).join(" · ")}</span>
             </span>
           </button>
         ))}

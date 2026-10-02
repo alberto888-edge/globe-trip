@@ -25,6 +25,7 @@ export async function POST(req: Request) {
     name: str(s?.name, 60),
     country: str(s?.country, 40) || undefined,
     days: Number(s?.days) > 0 ? Math.min(30, Math.round(Number(s.days))) : undefined,
+    must: Array.isArray(s?.must) ? s.must.map((x: unknown) => str(x, 50)).filter(Boolean).slice(0, 6) : undefined,
   })).filter((s) => s.name);
   if (!stops.length) return fail(400, "bad_request", "No hay paradas.");
   const body: ActivitiesRequest = {

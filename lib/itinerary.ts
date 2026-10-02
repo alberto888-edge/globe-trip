@@ -16,6 +16,7 @@ export function withDayRanges<T extends { days?: number }>(stops: T[]): (T & { w
 export function routeFromCandidates(name: string, picked: Candidate[], source: string | null, sources?: Route["sources"], risks?: Route["risks"]): Route {
   const stops: Stop[] = withDayRanges(orderStops(picked)).map((c) => ({
     name: c.name, country: c.country, sub: c.sub, note: c.note, lat: c.lat, lng: c.lng, days: c.days, wiki: c.wiki, when: c.when,
+    ...(c.spots?.length ? { spots: c.spots } : {}),
   }));
   return {
     id: `v${Date.now().toString(36)}`,
