@@ -415,7 +415,7 @@ export default function App() {
             <div className="chips">
               {route.stops.map((s, i) => (
                 <button key={i} type="button" className="chip" onClick={() => flyTo(s.lat, s.lng, 1.2)}>
-                  <PlacePhoto className="chip-photo" q={{ name: s.name, wiki: s.wiki, country: s.country }} />
+                  <PlacePhoto className="chip-photo" q={{ name: s.name, wiki: s.wiki, country: s.country, lat: s.lat, lng: s.lng }} />
                   <span className="chip-text"><em>{i + 1} · {s.when.toUpperCase()}</em><b>{s.name}</b><span>{s.sub}</span></span>
                 </button>
               ))}

@@ -19,7 +19,7 @@ export default function PickSheet({ result, onConfirm, onClose }: { result: Anal
       <div className="pick-grid">
         {result.candidates.map((c, i) => (
           <button key={i} type="button" className={`pick ${on[i] ? "pick--on" : ""}`} aria-pressed={on[i]} onClick={() => toggle(i)}>
-            <PlacePhoto className="pick-photo" q={{ name: c.name, wiki: c.wiki, country: c.country }} src={c.frame !== undefined ? result.frames[c.frame] : undefined} />
+            <PlacePhoto className="pick-photo" q={{ name: c.name, wiki: c.wiki, country: c.country, lat: c.lat, lng: c.lng }} src={c.frame !== undefined ? result.frames[c.frame] : undefined} />
             <span className="pick-check" aria-hidden="true">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
             </span>

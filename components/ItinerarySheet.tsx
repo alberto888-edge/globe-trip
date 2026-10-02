@@ -44,7 +44,7 @@ export function Risks({ r }: { r: TripRisk }) {
 }
 
 function Day({ s, i, last, onShow, onRemove, test }: { s: Stop; i: number; last: boolean; onShow: () => void; onRemove?: () => void; test: (a: NonNullable<Stop["activities"]>[number]) => boolean }) {
-  const { info } = usePlaceInfo({ name: s.name, wiki: s.wiki, country: s.country });
+  const { info } = usePlaceInfo({ name: s.name, wiki: s.wiki, country: s.country, lat: s.lat, lng: s.lng });
   return (
     <div className="day">
       <div className="track"><span className="node">{i + 1}</span>{!last && <span className="line" />}</div>

@@ -3,71 +3,19 @@
 // Results are cached in memory and localStorage so each place is looked up once.
 import { useEffect, useState } from "react";
 
-export interface PlaceInfo { image?: string; imageLarge?: string; thumb?: string; extract?: string; url?: string; title?: string }
-
-// Wikimedia only renders thumbnails at standard widths (330, 500, 960, 1280…);
-// any other width fails to load. Verified against the live service.
-const sized = (thumb: string, w: number) => thumb.replace(/\/\d+px-/, `/${w}px-`);
-export interface PlaceQuery { name: string; wiki?: string; country?: string }
+import { fileOf, lookupPlace, type PlaceInfo, type PlaceQuery } from "./wikiPhoto";
+export type { PlaceInfo, PlaceQuery } from "./wikiPhoto";
 
 const TTL = 30 * 24 * 3600 * 1000;
 const mem = new Map<string, Promise<PlaceInfo | null>>();
+// Which place showed each photo first, so two stops never share one (see lib/wikiPhoto.ts).
+const claimed = new Map<string, string>();
 
-const keyOf = (q: PlaceQuery) => `gt:wiki3:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
+// v4: earlier versions could cache a map as a place's picture.
+const keyOf = (q: PlaceQuery) => `gt:wiki4:${(q.wiki || q.name).toLowerCase()}|${(q.country || "").toLowerCase()}`;
+const owner = (q: PlaceQuery) => (q.wiki || q.name).toLowerCase();
 
-async function summary(lang: string, title: string): Promise<PlaceInfo | null> {
-  const res = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}?redirect=true`);
-  if (!res.ok) return null;
-  const j = await res.json();
-  if (j.type === "disambiguation") return null;
-  const thumb: string | undefined = j.thumbnail?.source;
-  const hasSteps = !!thumb && /\/\d+px-/.test(thumb);
-  return {
-    title: j.title,
-    thumb,
-    image: thumb ? (hasSteps ? sized(thumb, 500) : thumb) : j.originalimage?.source,
-    imageLarge: thumb ? (hasSteps ? sized(thumb, 960) : thumb) : j.originalimage?.source,
-    extract: j.extract,
-    url: j.content_urls?.mobile?.page || j.content_urls?.desktop?.page,
-  };
-}
-
-async function search(lang: string, q: string): Promise<string | null> {
-  const res = await fetch(`https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=5&format=json&origin=*`);
-  if (!res.ok) return null;
-  // skip airports, stations and the like that share the place's name
-  const hits: { title: string }[] = (await res.json()).query?.search ?? [];
-  return hits.find((h) => !/^(Aeropuerto|Estación|Anexo|Estadio|Club|Batalla)\b/i.test(h.title))?.title ?? null;
-}
-
-// Article pictures that aren't photos of the place: locator maps, flags, coats of arms, diagrams.
-const NOT_A_PHOTO = /\.svg\/|\b(map|mapa|karte|carte|locator|location|localizaci|situaci|flag|bandera|escudo|coat[_ ]of[_ ]arms|seal|emblem|relief|orthographic|topographic|logo)\b/i;
-const isPhoto = (u?: string) => !!u && !NOT_A_PHOTO.test(decodeURIComponent(u).replace(/[_-]/g, " "));
-
-async function lookup(q: PlaceQuery): Promise<PlaceInfo | null> {
-  const attempts: (() => Promise<PlaceInfo | null>)[] = [
-    () => (q.wiki ? summary("es", q.wiki) : Promise.resolve(null)),
-    () => summary("es", q.name),
-    async () => { const t = await search("es", [q.name, q.country].filter(Boolean).join(" ")); return t ? summary("es", t) : null; },
-    () => summary("en", q.name),
-    async () => { const t = await search("en", [q.name, q.country].filter(Boolean).join(" ")); return t ? summary("en", t) : null; },
-  ];
-  // Text from the first Spanish article; picture from the first article whose picture is a real photo.
-  let text: PlaceInfo | null = null;
-  let anyImage: PlaceInfo | null = null;
-  for (const a of attempts) {
-    const r = await a().catch(() => null);
-    if (!r) continue;
-    if (!text && r.extract) text = r;
-    if (r.image && isPhoto(r.thumb || r.image)) {
-      const t = text || r;
-      return { ...t, image: r.image, imageLarge: r.imageLarge, thumb: r.thumb };
-    }
-    if (r.image && !anyImage) anyImage = r;
-  }
-  if (!text && !anyImage) return null;
-  return { ...(text || anyImage!), image: anyImage?.image, imageLarge: anyImage?.imageLarge, thumb: anyImage?.thumb };
-}
+const fresh = (q: PlaceQuery) => lookupPlace(q, (u) => fetch(u), claimed, owner(q));
 
 export function placeInfo(q: PlaceQuery): Promise<PlaceInfo | null> {
   const key = keyOf(q);
@@ -75,9 +23,15 @@ export function placeInfo(q: PlaceQuery): Promise<PlaceInfo | null> {
   if (hit) return hit;
   let stored: { at: number; v: PlaceInfo | null } | null = null;
   try { stored = JSON.parse(localStorage.getItem(key) || "null"); } catch { /* ignore */ }
-  const p = stored && Date.now() - stored.at < TTL
-    ? Promise.resolve(stored.v)
-    : lookup(q).then((v) => { try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), v })); } catch { /* full */ } return v; });
+  const save = (v: PlaceInfo | null) => { try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), v })); } catch { /* full */ } return v; };
+  let p: Promise<PlaceInfo | null>;
+  if (stored && Date.now() - stored.at < TTL) {
+    // A cached photo another stop already shows: look again for a different one.
+    const f = stored.v?.image ? fileOf(stored.v.image) : "";
+    const by = f ? claimed.get(f) : undefined;
+    if (f && by && by !== owner(q)) p = fresh(q).then(save);
+    else { if (f) claimed.set(f, owner(q)); p = Promise.resolve(stored.v); }
+  } else p = fresh(q).then(save);
   mem.set(key, p);
   return p;
 }
