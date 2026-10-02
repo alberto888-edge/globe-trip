@@ -145,6 +145,8 @@ const TOPBAR = 70; // px reserved at the top for the header
 const CUSTOM_TILES = process.env.NEXT_PUBLIC_SATELLITE_TILES || "";
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const HAS_TILES = Boolean(CUSTOM_TILES || MAPBOX_TOKEN);
+// Mapbox is requested @2x (512 px); a custom XYZ source such as Esri serves 256 px.
+const TILE_PX: 256 | 512 = CUSTOM_TILES ? 256 : 512;
 
 // Every imagery provider requires its credit on screen. Esri's terms ask for "Powered by
 // Esri" plus the imagery sources; any other custom source can name its own.
@@ -400,7 +402,7 @@ export default function GlobeCanvas(props: Props) {
   useEffect(() => {
     if (!w || !h) return;
     const e = tileEngine.current;
-    if (e) e.thresholds = tileThresholds(w / h);
+    if (e) e.thresholds = tileThresholds(w / h, TILE_PX);
   }, [w, h, ready]);
 
   // The two global textures the ocean is painted from. Loaded once, shared by every tile.
@@ -444,7 +446,7 @@ export default function GlobeCanvas(props: Props) {
     if (!g) return;
     g.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     sharpenTextures(g.scene(), g.renderer());
-    tileEngine.current = setupTileEngine(g.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h)));
+    tileEngine.current = setupTileEngine(g.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h), TILE_PX));
     const c = g.controls();
     c.enableDamping = true;
     c.dampingFactor = 0.08;
@@ -488,7 +490,7 @@ export default function GlobeCanvas(props: Props) {
     sharpenTimer.current = setInterval(() => {
       const gg = globeRef.current;
       if (gg) {
-        tileEngine.current = setupTileEngine(gg.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h))) ?? tileEngine.current;
+        tileEngine.current = setupTileEngine(gg.scene(), seaTex.mask, seaTex.ref, tileThresholds(w / Math.max(1, h), TILE_PX)) ?? tileEngine.current;
         sharpenTextures(gg.scene(), gg.renderer());
       }
       if (--left <= 0 && sharpenTimer.current) { clearInterval(sharpenTimer.current); sharpenTimer.current = null; }

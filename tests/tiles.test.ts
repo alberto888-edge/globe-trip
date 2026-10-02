@@ -120,3 +120,29 @@ test("la cara oculta del globo no se pide", () => {
   // Whole globe on a phone: the near hemisphere at level 3 is 32 tiles at most.
   assert.ok(probe(3, 390, 844).tiles <= 36, `globo entero: ${probe(3, 390, 844).tiles} teselas`);
 });
+
+test("con teselas de 256 px la media distancia no se queda en el nivel 3", () => {
+  // Alberto's recording (01/10): islands smeared at medium distance with Esri's 256-px
+  // tiles, because level 3 held down to ~0.89 radii. Close views must not change.
+  const level256 = (alt: number, w: number, h: number) => {
+    const m = new SlippyMap(R) as unknown as { thresholds: number[]; level: number; tileUrl: unknown; updatePov: (c: THREE.Camera) => void };
+    m.thresholds = tileThresholds(w / h, 256);
+    let tiles = 0;
+    m.tileUrl = () => { tiles++; return "t"; };
+    const cam = new THREE.PerspectiveCamera(50, w / h, 0.1, 10000);
+    cam.position.copy(polar(12, 122, alt));
+    cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true);
+    m.updatePov(cam);
+    return { level: m.level, tiles };
+  };
+  for (const alt of [3, 2, 1.4, 1.0, 0.9]) {
+    const { level, tiles } = level256(alt, 390, 844);
+    assert.ok(level >= 4, `móvil, altura ${alt}: nivel ${level}`);
+    assert.ok(tiles <= 140, `móvil, altura ${alt}: ${tiles} teselas`);
+  }
+  for (const alt of [1.4, 1.0, 0.6]) assert.ok(level256(alt, 1440, 900).level >= 4, `escritorio, altura ${alt}`);
+  for (const alt of [0.6, 0.45, 0.3, 0.2, 0.1]) {
+    assert.equal(level256(alt, 390, 844).level, probe(alt, 390, 844, 12, 122).level, `altura ${alt}: de cerca no debe cambiar`);
+  }
+});

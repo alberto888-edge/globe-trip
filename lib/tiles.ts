@@ -28,11 +28,20 @@ export const MAX_TILE_LEVEL = 12;
  * screen, so a wider window needs each level to start closer in; measured across phone,
  * tablet and desktop, that correction is sqrt(reference / aspect) to within a few percent.
  *
+ * `tilePx` is the provider's tile size. The ladder above was measured with Mapbox @2x
+ * (512 px). Standard XYZ tiles such as Esri World Imagery are 256 px: half the detail per
+ * level. Up close that still looks good, but level 3 held from the whole globe down to
+ * ~0.89 radii, and at medium distance islands came out smeared (Alberto's screen
+ * recording, 01/10). For 256-px tiles level 3 is kept only for the farthest views.
+ * Measured on the vendored engine over six regions: that band goes from ~35 to 80-130
+ * tiles per view, still under what close views already cost (~200), and close views are
+ * untouched.
+ *
  * Every slot is filled and strictly decreasing on purpose. The engine resolves a level
  * with findIndex, and a gap makes that return -1, which it reads as "maximum level" —
  * thousands of tiles at once.
  */
-export function tileThresholds(aspect: number): number[] {
+export function tileThresholds(aspect: number, tilePx: 256 | 512 = 512): number[] {
   const scale = Math.sqrt(LADDER_ASPECT / Math.min(4, Math.max(0.2, aspect)));
   const out: number[] = new Array(30).fill(Infinity);
   let prev = Infinity;
@@ -41,6 +50,7 @@ export function tileThresholds(aspect: number): number[] {
     out[L] = Math.min(base, prev * 0.98);
     prev = out[L];
   }
+  if (tilePx === 256) out[3] = Math.max(out[3], 4 * scale);
   return out;
 }
 
