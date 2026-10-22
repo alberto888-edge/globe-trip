@@ -64,7 +64,20 @@ async function callTool(system: string, content: Anthropic.MessageParam["content
         messages: [{ role: "user", content }],
       });
       lastModel = msg.model;
-      return msg.content.find((b) => b.type === "tool_use")?.input;
+      const use = msg.content.find((b) => b.type === "tool_use");
+      if (use) return use.input;
+      // tool_choice "auto" lets the model answer in prose: log it and ask once more for the tool.
+      const said = msg.content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join(" ").slice(0, 400);
+      console.log("[callTool] no tool_use", JSON.stringify({ model: msg.model, stop: msg.stop_reason, said }));
+      if (msg.stop_reason === "end_turn" && attempt < 2) {
+        const again = await c.messages.create({
+          model, max_tokens: maxTokens, ...(noTemperature.has(model) ? {} : { temperature: 0 }), system, tools: [tool], tool_choice: { type: "auto" },
+          messages: [{ role: "user", content }, { role: "assistant", content: msg.content }, { role: "user", content: `Llama ahora a la herramienta ${tool.name} con tu respuesta. Solo la llamada, sin texto.` }],
+        });
+        const use2 = again.content.find((b) => b.type === "tool_use");
+        if (use2) return use2.input;
+      }
+      return undefined;
     } catch (e: any) {
       const text = String(e?.message ?? e);
       if (e?.status === 400 && /tool_choice/.test(text) && !noForcedTool.has(model)) { noForcedTool.add(model); continue; }
