@@ -90,6 +90,10 @@ const VIDEO_TOOL: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
+      // First on purpose: the forced tool call has no room to think, so the model writes down
+      // what it actually reads before it names anything. Without this it guessed a famous
+      // look-alike ("Takayama Old Town") for a street whose own signs named the place.
+      clues: { type: "string", description: "PRIMERO, antes de decidir nada: copia literalmente los textos legibles de las imágenes (carteles, rótulos, letreros, en cualquier idioma y alfabeto, con su traducción) y las pistas visuales clave (monumentos, torres, montañas). Máx. 600 caracteres." },
       found: { type: "boolean", description: "true si el vídeo muestra o nombra al menos un lugar concreto visitable." },
       reason: { type: "string", description: "Si found es false: por qué, en una frase en español." },
       name: { type: "string", description: "Nombre corto y evocador de la ruta (máx. 40 caracteres)." },
@@ -99,6 +103,7 @@ const VIDEO_TOOL: Anthropic.Tool = {
         items: {
           type: "object",
           properties: {
+            evidence: { type: "string", description: "La pista concreta que identifica este lugar: el texto leído (cítalo), la descripción/hashtag, o el monumento inconfundible que se ve. Si solo es 'se parece a', este lugar no va como sitio concreto." },
             ...place,
             frame: { type: "integer", description: "Número de la imagen donde mejor se ve este lugar (1, 2…), o 0 si no sale en ninguna." },
             scope: { type: "string", enum: ["place", "region", "country"], description: "place = sitio concreto (ciudad, pueblo, playa, monumento…); region = región o isla grande; country = el país entero." },
@@ -122,13 +127,14 @@ Recibes lo que sabemos del vídeo: su descripción, a veces el lugar etiquetado 
 
 Cómo trabajar:
 1. Lee los textos que aparecen en pantalla en las imágenes: en los vídeos de viajes los lugares suelen salir escritos ("📍 Kioto", "Día 2: Nara", listas de sitios).
-2. Reconoce lugares por lo que se ve (monumentos, paisajes famosos) solo si estás bastante seguro.
+   Lee también los carteles y rótulos de la propia escena, en cualquier idioma y alfabeto (japonés, chino, coreano, árabe, cirílico…), y tradúcelos. Un cartel que nombra un barrio, una torre, una estación o un monumento (p. ej. 浅草 = Asakusa, en Tokio; 明洞 = Myeongdong, en Seúl) es la pista más fiable que hay y manda sobre la impresión general de la escena. Anótalo todo en clues antes de decidir.
+2. Reconoce lugares por lo que se ve solo si son inconfundibles (la Torre Eiffel, el Taj Mahal, una torre o un monumento con forma única). "Una calle tradicional japonesa", "un pueblo blanco", "una playa turquesa" NO identifican un sitio concreto: muchos se parecen. No elijas el sitio famoso que más se le parece.
 3. Usa la descripción y los hashtags como apoyo (#kyoto, #bali), ignorando los genéricos (#travel, #fyp, #viajes).
 4. Devuelve cada lugar concreto (ciudad, pueblo, parque, playa, monumento, mirador) una sola vez, en el orden en que sale en el vídeo.
    Un sitio dentro de una ciudad (una calle famosa, un mercado, un templo, un barrio, un mirador urbano) NO es un destino por sí solo: el viajero va a esa ciudad y allí visita ese sitio. Devuélvelo con su propio nombre, sus coordenadas y rellena city con la ciudad donde está (más city_lat, city_lng, city_wiki y city_days). Ejemplo: un vídeo de la Train Street de Hanói → name "Train Street", city "Hanói". La app organizará el viaje en Hanói y pondrá la Train Street como actividad destacada. Si no sabes con seguridad en qué ciudad está, deduce la ciudad por el resto del vídeo (texto, idioma de los carteles, hashtags).
 5. Coordenadas reales. Si un nombre es ambiguo, elige el que encaje con el resto del vídeo.
 6. Días recomendados por lugar: los que diga el vídeo o una estimación razonable.
-7. No inventes sitios concretos. Si el vídeo solo deja claro el país o la región (paisajes sin nombre, sin texto), devuelve ese país o región con scope "country" o "region" y found=true; la app propondrá planificar un viaje allí.
+7. No inventes sitios concretos: cada lugar necesita una pista citable en evidence. Si el vídeo solo deja claro el país o la región (paisajes sin nombre, sin texto, o un ambiente que solo dice "esto es Japón"), devuelve ese país o región con scope "country" o "region" y found=true; la app propondrá planificar un viaje allí.
 8. Rellena risks con los riesgos actuales de viajar a esos países.
 Todo en español. Si no hay ningún lugar ni país identificable, found=false con el motivo.
 Responde siempre llamando a save_places.`;
@@ -181,6 +187,9 @@ const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").t
 export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"] } {
   const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(input);
   if (!r.success) throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
+  // What the model says it read: the first thing to look at when a video lands in the wrong place.
+  const clues = (input as { clues?: unknown }).clues;
+  if (typeof clues === "string" && clues) console.log("[analyze] clues", JSON.stringify(clues.slice(0, 600)));
   const none = tr(lang, "No he encontrado lugares concretos en este vídeo.", "I couldn't find any specific places in this video.");
   if (!r.data.found) throw new ExtractError("no_places", r.data.reason || none);
   const candidates: Candidate[] = [];
