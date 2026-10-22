@@ -215,8 +215,17 @@ const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").t
 
 /** Validates the model output. Exported for tests. */
 export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"]; clues?: string } {
-  const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(input);
-  if (!r.success) throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
+  // Some models send nested fields as JSON strings ("places": "[...]", "found": "true"): unwrap them.
+  const unwrap = (v: unknown) => { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return v; } };
+  const fixed = input && typeof input === "object"
+    ? Object.fromEntries(Object.entries(input as Record<string, unknown>).map(([k, v]) => [k, k === "found" || k === "places" || k === "risks" ? unwrap(v) : v]))
+    : input;
+  const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(fixed);
+  if (!r.success) {
+    console.log("[analyze] bad tool input", JSON.stringify(input)?.slice(0, 1500));
+    throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
+  }
+  input = fixed;
   // What the model says it read: the first thing to look at when a video lands in the wrong place.
   const clues = (input as { clues?: unknown }).clues;
   if (typeof clues === "string" && clues) console.log("[analyze] clues", JSON.stringify(clues.slice(0, 600)));
