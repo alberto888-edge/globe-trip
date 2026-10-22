@@ -112,6 +112,7 @@ export interface AnalyzeOk {
   source: string | null;
   sources: AnalyzeSources;
   risks?: TripRisk;
+  clues?: string; // what the model says it read in the frames, for debugging misses
 }
 
 export type AnalyzeResponse = AnalyzeOk | { ok: false; code: AnalyzeErrorCode; message: string };

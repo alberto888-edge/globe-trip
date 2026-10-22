@@ -184,7 +184,7 @@ const CandidateSchema = z.object({
 const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** Validates the model output. Exported for tests. */
-export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"] } {
+export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"]; clues?: string } {
   const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(input);
   if (!r.success) throw new ExtractError("upstream", "La IA devolvió un formato inesperado.");
   // What the model says it read: the first thing to look at when a video lands in the wrong place.
@@ -259,7 +259,7 @@ export function toCandidates(input: unknown, imageCount: number, lang: Lang = "e
   const concrete = candidates.filter((c) => c.scope === "place");
   const kept = concrete.length ? concrete : candidates;
   const countries = [...new Set(kept.map((c) => c.country).filter(Boolean) as string[])];
-  return { name: (r.data.name || tr(lang, "Tu ruta", "Your route")).slice(0, 48), candidates: kept, risks: normalizeRisk(r.data.risks, countries, lang) };
+  return { name: (r.data.name || tr(lang, "Tu ruta", "Your route")).slice(0, 48), candidates: kept, risks: normalizeRisk(r.data.risks, countries, lang), clues: typeof clues === "string" ? clues.slice(0, 600) : undefined };
 }
 
 // ---------------------------------------------------------------- plan a trip from scratch

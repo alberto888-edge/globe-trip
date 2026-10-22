@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { name, candidates, risks } = await extractCandidates({ ...ctx, userText: text || undefined }, images, lang);
+    const { name, candidates, risks, clues } = await extractCandidates({ ...ctx, userText: text || undefined }, images, lang);
     const refined = await Promise.all(candidates.map(refineWithMapbox));
     const out: AnalyzeOk = {
       ok: true,
@@ -57,6 +57,7 @@ export async function POST(req: Request) {
         audio: Boolean(ctx.audioTranscript), userText: Boolean(text), frames: images.length,
       },
       risks,
+      clues,
     };
     console.log("[analyze]", JSON.stringify({ url: key || null, lang, ...out.sources, places: refined.length, scopes: refined.map((c) => c.scope) }));
     if (key) {
