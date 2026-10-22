@@ -41,26 +41,38 @@ function client() {
 /** Model that answered the last call, reported with video analyses for debugging. */
 let lastModel: string | undefined;
 
-/** One forced tool call; returns the tool input. */
+// Newer models reject some request options (Sonnet 5.5: no forced tool_choice). Once a model
+// refuses an option we stop sending it, so only its first call per instance pays the retry.
+const noForcedTool = new Set<string>();
+const noTemperature = new Set<string>();
+
+/** One tool call (forced when the model allows it); returns the tool input. */
 async function callTool(system: string, content: Anthropic.MessageParam["content"], tool: Anthropic.Tool, maxTokens = 3000, model = MODEL()): Promise<unknown> {
   const c = client();
-  try {
-    const msg = await c.messages.create({
-      model,
-      max_tokens: maxTokens,
-      // Extraction is a reading task, not a creative one. Without this the same video
-      // can yield different places on each run, which is exactly the flakiness we saw.
-      temperature: 0,
-      system,
-      tools: [tool],
-      tool_choice: { type: "tool", name: tool.name },
-      messages: [{ role: "user", content }],
-    });
-    lastModel = msg.model;
-    return msg.content.find((b) => b.type === "tool_use")?.input;
-  } catch (e: any) {
-    throw new ExtractError("upstream", `Claude no respondió: ${e?.status ?? ""} ${e?.message ?? e}`.trim());
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const msg = await c.messages.create({
+        model,
+        max_tokens: maxTokens,
+        // Extraction is a reading task, not a creative one. Without this the same video
+        // can yield different places on each run, which is exactly the flakiness we saw.
+        ...(noTemperature.has(model) ? {} : { temperature: 0 }),
+        system,
+        tools: [tool],
+        // Every prompt ends with "Responde siempre llamando a <tool>", so "auto" still lands on the tool.
+        tool_choice: noForcedTool.has(model) ? { type: "auto" } : { type: "tool", name: tool.name },
+        messages: [{ role: "user", content }],
+      });
+      lastModel = msg.model;
+      return msg.content.find((b) => b.type === "tool_use")?.input;
+    } catch (e: any) {
+      const text = String(e?.message ?? e);
+      if (e?.status === 400 && /tool_choice/.test(text) && !noForcedTool.has(model)) { noForcedTool.add(model); continue; }
+      if (e?.status === 400 && /temperature/.test(text) && !noTemperature.has(model)) { noTemperature.add(model); continue; }
+      throw new ExtractError("upstream", `Claude no respondió: ${e?.status ?? ""} ${text}`.trim());
+    }
   }
+  throw new ExtractError("upstream", "Claude no respondió: el modelo rechazó la petición.");
 }
 
 const place = {
