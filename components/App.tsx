@@ -139,7 +139,7 @@ export default function App() {
   };
 
   const buildFromPicked = (result: AnalyzeOk, picked: Candidate[]) => {
-    const r = routeFromCandidates(result.name, picked, result.source, result.sources, result.risks);
+    const r = routeFromCandidates(result.name, picked, result.source, result.sources, result.risks, result.frames);
     showRoute(r);
     say(picked.length === 1 ? t("Ruta creada con 1 lugar", "Route made with 1 place") : t(`Ruta creada con ${picked.length} lugares`, `Route made with ${picked.length} places`));
   };

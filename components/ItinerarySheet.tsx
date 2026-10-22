@@ -58,7 +58,7 @@ function Day({ s, i, when, last, onShow, onRemove, test }: { s: Stop; i: number;
         <em>{when.toUpperCase()}{s.added && <span className="day-added"> · {t("AÑADIDO POR TI", "ADDED BY YOU")}</span>}</em>
         <b>{s.name}{s.country && <small className="day-country"> · {s.country}</small>}</b>
         {s.note && <p>{s.note}</p>}
-        {info?.image && <PlacePhoto className="day-photo" src={info.imageLarge || info.image} alt={s.name} />}
+        {(s.photo || info?.image) && <PlacePhoto className="day-photo" src={s.photo || info?.imageLarge || info?.image} alt={s.name} />}
         {info?.extract && <p className="day-extract">{info.extract.length > 220 ? info.extract.slice(0, 220).replace(/\s\S*$/, "") + "…" : info.extract}</p>}
         {s.activities && s.activities.length > 0 && <ActivityList list={s.activities} test={test} />}
         <div className="day-links">
@@ -100,10 +100,10 @@ export default function ItinerarySheet({ route, saved, activities, onClose, onSh
   };
   return (
     <Sheet label={route.name} onClose={onClose}>
-      {first && <PlacePhoto className="hero-photo" large q={{ name: first.name, wiki: first.wiki, country: first.country, lat: first.lat, lng: first.lng }} />}
+      {first && <PlacePhoto className="hero-photo" large src={first.photo} q={{ name: first.name, wiki: first.wiki, country: first.country, lat: first.lat, lng: first.lng }} />}
       <span className="eyebrow">{route.kind === "plan" ? t("TU VIAJE A MEDIDA", "YOUR TAILOR-MADE TRIP") : route.kind === "ready" ? t("VIAJE LISTO", "READY-MADE TRIP") : route.kind === "demo" ? t("RUTA DE EJEMPLO", "SAMPLE ROUTE") : t("RUTA DE TU VÍDEO", "ROUTE FROM YOUR VIDEO")}</span>
       <h2>{route.name}</h2>
-      <p className="sub">{route.days} {t("DÍAS", "DAYS")} · {route.stops.length} {t("PARADAS", "STOPS")} · {Math.round(routeKm(route.stops)).toLocaleString(locale(lang))} KM</p>
+      <p className="sub">{route.days} {t("DÍAS", "DAYS")} · {route.stops.length} {route.stops.length === 1 ? t("PARADA", "STOP") : t("PARADAS", "STOPS")} · {Math.round(routeKm(route.stops)).toLocaleString(locale(lang))} KM</p>
       {route.summary && <p className="note">{route.summary}</p>}
       {route.sources && <Sources s={route.sources} />}
       {route.risks && route.risks.level >= 3 && <Risks r={route.risks} />}

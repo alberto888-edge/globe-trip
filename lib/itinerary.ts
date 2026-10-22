@@ -13,10 +13,14 @@ export function withDayRanges<T extends { days?: number }>(stops: T[]): (T & { w
 }
 
 /** Builds a route from the places the person kept: the video's order, unless that zig-zags. */
-export function routeFromCandidates(name: string, picked: Candidate[], source: string | null, sources?: Route["sources"], risks?: Route["risks"]): Route {
+export function routeFromCandidates(name: string, picked: Candidate[], source: string | null, sources?: Route["sources"], risks?: Route["risks"], frames: string[] = []): Route {
+  // The frame the place came from: it ties the result back to the video (a stock photo of
+  // the city does not). Capped so saved trips stay small in localStorage.
+  const photoOf = (c: Candidate) => { const f = c.frame !== undefined ? frames[c.frame] : undefined; return f && f.length < 400_000 ? f : undefined; };
   const stops: Stop[] = withDayRanges(orderStops(picked)).map((c) => ({
     name: c.name, country: c.country, sub: c.sub, note: c.note, lat: c.lat, lng: c.lng, days: c.days, wiki: c.wiki, when: c.when,
     ...(c.spots?.length ? { spots: c.spots } : {}),
+    ...(photoOf(c) ? { photo: photoOf(c) } : {}),
   }));
   return {
     id: `v${Date.now().toString(36)}`,

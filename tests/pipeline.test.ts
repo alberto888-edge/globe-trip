@@ -393,3 +393,15 @@ test("toCandidates rebuilds a one-place answer that the model flattened (Sonnet 
   assert.equal(out.risks?.level, 1);
   assert.match(out.clues ?? "", /新世界/);
 });
+
+test("routeFromCandidates keeps the video frame a stop came from as its photo", () => {
+  const frames = ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"];
+  const r = routeFromCandidates("Osaka", [
+    { name: "Osaka", country: "Japón", sub: "", note: "", days: 3, lat: 34.69, lng: 135.5, frame: 1, scope: "place" } as any,
+    { name: "Tokio", country: "Japón", sub: "", note: "", days: 3, lat: 35.68, lng: 139.69, scope: "place" } as any,
+  ], null, undefined, undefined, frames);
+  const osaka = r.stops.find((s) => s.name === "Osaka")!;
+  const tokio = r.stops.find((s) => s.name === "Tokio")!;
+  assert.equal(osaka.photo, "data:image/jpeg;base64,BBB");
+  assert.equal(tokio.photo, undefined);
+});

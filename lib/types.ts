@@ -21,6 +21,7 @@ export interface Stop {
   activities?: Activity[];
   added?: boolean; // put in by the person after the trip was made
   spots?: Spot[]; // specific places from the video inside this stop (a street, a market, a temple)
+  photo?: string; // the video frame where this stop shows (JPEG data URL), shown instead of a stock photo
 }
 
 /** A specific place the video showed inside a city: it becomes a must-do there, not a destination. */
