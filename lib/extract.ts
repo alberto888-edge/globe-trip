@@ -217,9 +217,25 @@ const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").t
 export function toCandidates(input: unknown, imageCount: number, lang: Lang = "es"): { name: string; candidates: Candidate[]; risks?: Route["risks"]; clues?: string } {
   // Some models send nested fields as JSON strings ("places": "[...]", "found": "true"): unwrap them.
   const unwrap = (v: unknown) => { if (typeof v !== "string") return v; try { return JSON.parse(v); } catch { return v; } };
-  const fixed = input && typeof input === "object"
+  const fixed: any = input && typeof input === "object"
     ? Object.fromEntries(Object.entries(input as Record<string, unknown>).map(([k, v]) => [k, k === "found" || k === "places" || k === "risks" ? unwrap(v) : v]))
     : input;
+  // Sonnet 5.5 without a forced tool can flatten a one-item array: "places" becomes a broken
+  // string and that place's fields land at the top level (same for "risks"). Rebuild them.
+  if (fixed && typeof fixed === "object") {
+    if (typeof fixed.places === "string" && typeof fixed.lat === "number" && typeof fixed.lng === "number") {
+      const keys = [...Object.keys(place), "frame", "scope", "evidence", "city", "city_lat", "city_lng", "city_wiki", "city_days"];
+      const one: Record<string, unknown> = {};
+      for (const k of keys) if (k !== "name" && k in fixed) one[k] = fixed[k];
+      const m = /name">\s*([^<\n]+)/.exec(fixed.places);
+      one.name = m ? m[1].trim() : fixed.name;
+      fixed.places = [one];
+    }
+    if (typeof fixed.risks === "string" && typeof fixed.summary === "string") {
+      const lvl = /(\d)\s*$/.exec(fixed.risks);
+      fixed.risks = { level: lvl ? Number(lvl[1]) : 1, summary: fixed.summary, points: fixed.points ?? [], countries: fixed.countries ?? [] };
+    }
+  }
   const r = z.object({ found: z.boolean(), reason: z.string().optional(), name: z.string().optional(), places: z.array(z.unknown()).optional(), risks: z.unknown().optional() }).safeParse(fixed);
   if (!r.success) {
     console.log("[analyze] bad tool input", JSON.stringify(input)?.slice(0, 1500));

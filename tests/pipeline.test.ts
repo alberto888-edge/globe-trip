@@ -376,3 +376,20 @@ test("las partidas del presupuesto quedan cortas, sin paréntesis cortados", () 
     { budget: "medio", travelers: 2, lang: "en" });
   assert.deepEqual(r.budget!.breakdown.map((b) => b.label), ["Accommodation", "Local transport", "Food"]);
 });
+
+test("toCandidates rebuilds a one-place answer that the model flattened (Sonnet 5.5, tool_choice auto)", () => {
+  // Real output from production, 22/10/2026: "places" and "risks" arrive as broken strings
+  // and their fields land at the top level.
+  const out = toCandidates({
+    found: true, name: "Osaka Shinsekai Neon Streets", clues: "新世界 (Shinsekai), 通天閣店",
+    places: '\n<parameter name="name">Shinsekai', country: "Japón", sub: "Barrio retro", note: "Kushikatsu y la torre Tsutenkaku.",
+    days: 1, lat: 34.6525, lng: 135.5063, frame: 1, scope: "place", evidence: "Cartel 新世界", wiki: "Shinsekai",
+    city: "Osaka", city_days: 3, city_lat: 34.6937, city_lng: 135.5023, city_wiki: "Osaka",
+    risks: '\n<parameter name="level">1', summary: "Japón es muy seguro.", points: ["Terremotos y tifones"], countries: ["Japón"],
+  }, 4);
+  assert.equal(out.candidates.length, 1);
+  assert.equal(out.candidates[0].name, "Osaka");
+  assert.ok(out.candidates[0].spots?.some((s) => s.name === "Shinsekai"));
+  assert.equal(out.risks?.level, 1);
+  assert.match(out.clues ?? "", /新世界/);
+});
