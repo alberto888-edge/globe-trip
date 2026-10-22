@@ -38,6 +38,9 @@ function client() {
   return new Anthropic({ apiKey });
 }
 
+/** Model that answered the last call, reported with video analyses for debugging. */
+let lastModel: string | undefined;
+
 /** One forced tool call; returns the tool input. */
 async function callTool(system: string, content: Anthropic.MessageParam["content"], tool: Anthropic.Tool, maxTokens = 3000, model = MODEL()): Promise<unknown> {
   const c = client();
@@ -53,6 +56,7 @@ async function callTool(system: string, content: Anthropic.MessageParam["content
       tool_choice: { type: "tool", name: tool.name },
       messages: [{ role: "user", content }],
     });
+    lastModel = msg.model;
     return msg.content.find((b) => b.type === "tool_use")?.input;
   } catch (e: any) {
     throw new ExtractError("upstream", `Claude no respondió: ${e?.status ?? ""} ${e?.message ?? e}`.trim());
@@ -159,7 +163,8 @@ export async function extractCandidates(ctx: Partial<VideoContext> & { userText?
   });
   if (images.length) content.push({ type: "text", text: "Fin de las imágenes. Detecta los lugares y llama a save_places." });
   const [system, tool] = localize(VIDEO_SYSTEM, VIDEO_TOOL, lang);
-  return toCandidates(await callTool(system, content, tool), images.length, lang);
+  const out = toCandidates(await callTool(system, content, tool), images.length, lang);
+  return { ...out, model: lastModel };
 }
 
 const Num = z.coerce.number();

@@ -112,6 +112,7 @@ export interface AnalyzeOk {
   source: string | null;
   sources: AnalyzeSources;
   risks?: TripRisk;
+  model?: string; // model that read the frames
   clues?: string; // what the model says it read in the frames, for debugging misses
 }
 
